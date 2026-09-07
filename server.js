@@ -139,7 +139,7 @@ const requireAuth = (req, res, next) => {
 
 // Global rate limiter (exempting live audio streaming)
 app.use((req, res, next) => {
-  if (req.path === '/stream' || req.path.startsWith('/stream')) {
+  const p = req.path.toLowerCase(); if (p === '/stream' || p.startsWith('/stream')) {
     return next();
   }
   return apiLimiter(req, res, next);
@@ -148,7 +148,7 @@ app.use((req, res, next) => {
 // GLOBAL DENY-BY-DEFAULT AUTH
 app.use((req, res, next) => {
   // Allow public endpoints
-  if (req.path === '/api/login' || req.path === '/stream' || req.path.startsWith('/stream') || req.path === '/health' || req.path === '/ping' || req.path === '/debug-ytdlp' || req.path === '/debug-exec') {
+  const p2 = req.path.toLowerCase(); if (p2 === '/api/login' || p2 === '/stream' || p2.startsWith('/stream') || p2 === '/health' || p2 === '/ping' || p2 === '/debug-ytdlp' || p2 === '/debug-exec') {
     return next();
   }
   // Enforce auth for everything else not caught by express.static
@@ -2488,7 +2488,7 @@ async function playNext() {
   }
 }
 
-app.get("/stream", (req, res) => {
+app.get(["/stream", "/STREAM"], (req, res) => {
   if (res.socket) {
     res.socket.setNoDelay(true);
   }
