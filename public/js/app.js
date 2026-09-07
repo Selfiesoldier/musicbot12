@@ -61,7 +61,12 @@ async function fetchApi(endpoint, method = 'POST', body = null) {
     const data = await res.json();
     if (!res.ok) {
       if (res.status === 401 && !isRestarting) {
-        window.location.reload(); // Session expired
+        UI.loginOverlay.classList.add('active');
+        UI.dashboard.classList.add('hidden');
+        if (eventSource) {
+          try { eventSource.close(); } catch (e) {}
+          eventSource = null;
+        }
       }
       throw new Error(data.error || data.message || `HTTP ${res.status}`);
     }

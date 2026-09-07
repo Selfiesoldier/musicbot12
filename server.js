@@ -98,7 +98,7 @@ app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: "strict", maxAge: 86400000 } // 24h
+  cookie: { httpOnly: true, sameSite: "lax", maxAge: 86400000 } // 24h
 }));
 
 const loginLimiter = rateLimit({
