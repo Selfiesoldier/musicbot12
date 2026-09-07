@@ -27,6 +27,16 @@ if (fs.existsSync(path.join(process.cwd(), ".env"))) {
 }
 dotenv.config({ override: true });
 
+// Process Crash Guardian - Prevents unhandled errors from terminating the server
+process.on('uncaughtException', (err) => {
+  console.error('💥 [Crash Guardian] Uncaught Exception:', err.message, err.stack);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💥 [Crash Guardian] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+
 const app = express();
 app.set("trust proxy", 1);
 app.use(express.json());
