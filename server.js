@@ -749,18 +749,30 @@ class PersistentStreamManager {
     if (this.silenceInterval) return;
     
     this.isSendingSilence = true;
+    this.silenceStartTime = Date.now();
+    this.silenceSentMs = 0;
     console.log('🔇 Starting silence feed to keep encoder alive...');
     
-    const silenceChunk = this.generateSilencePCM(50);
+    const CHUNK_MS = 50;
+    const silenceChunk = this.generateSilencePCM(CHUNK_MS);
     
     this.silenceInterval = setInterval(() => {
-      if (this.isSendingSilence && this.pcmInputStream && !this.pcmInputStream.destroyed) {
+      if (!this.isSendingSilence || !this.pcmInputStream || this.pcmInputStream.destroyed) {
+        return;
+      }
+      
+      const elapsedMs = Date.now() - this.silenceStartTime;
+      // Clock-corrected pacing: maintain a 250ms lead cushion ahead of wall-clock time
+      // Prevents client buffer starvation and eliminates disconnection between tracks
+      while (this.silenceSentMs - elapsedMs < 250) {
         try {
           this.pcmInputStream.write(silenceChunk);
+          this.silenceSentMs += CHUNK_MS;
         } catch (err) {
+          break;
         }
       }
-    }, 50);
+    }, 40);
   }
   
   stopSilenceFeed() {
@@ -770,6 +782,8 @@ class PersistentStreamManager {
   
   resumeSilenceFeed() {
     this.isSendingSilence = true;
+    this.silenceStartTime = Date.now();
+    this.silenceSentMs = 0;
     console.log('🔇 Resuming silence feed...');
   }
   
@@ -1331,7 +1345,7 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
     '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
     '--extractor-args', 'youtube:player_client=mweb,web,ios',
   ];
-  const formatArg = isSoundCloud ? 'bestaudio[protocol^=http]/bestaudio/best' : 'ba[ext=m4a]/ba[ext=webm]/bestaudio/best/18';
+  const formatArg = 'bestaudio/best';
 
   const ytdlpArgs = [
     '--force-ipv4',
