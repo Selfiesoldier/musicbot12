@@ -454,7 +454,11 @@ try {
   const staleTmp = path.join(__dirname, 'tmp');
   if (fs.existsSync(staleTmp)) fs.rmSync(staleTmp, { recursive: true, force: true });
 } catch (e) {}
-const ytdlpEnv = { ...process.env };
+const ytdlpEnv = {
+  ...process.env,
+  DENO_V8_FLAGS: '--max-old-space-size=48 --max-semi-space-size=1',
+  NODE_OPTIONS: '--max-old-space-size=48'
+};
 
 const QUEUE_FILE = path.join(__dirname, "queue_state.json");
 const PLAYBACK_STATE_FILE = path.join(__dirname, "playback_state.json");
@@ -958,7 +962,7 @@ class PersistentStreamManager {
       }
 
       // If client socket has accumulated over 512KB (~32 seconds) of unsent data, drop frozen connection
-      if (client.writableLength > 512 * 1024) {
+      if (client.writableLength > 1024 * 1024) {
         console.log(`⚠️ Dropping frozen client (${Math.floor(client.writableLength / 1024)} KB queued)`);
         clientsToRemove.push(client);
         this.stats.droppedClients++;
@@ -1314,16 +1318,15 @@ function killCurrentStream() {
     currentLocalFilePath = null;
   }
   
-  streamManager.clearAudioBuffer();
+  // streamManager.clearAudioBuffer(); // Keep circular audio buffer intact to prevent client stream starvation
 }
 
 function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true) {
   const cookieArgs = withCookies ? getCookieArgs() : [];
   const proxyArgs = getProxyArgs();
   const isSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
-  const jsRuntimeArgs = fs.existsSync('/usr/local/bin/deno')
-    ? ['--js-runtimes', 'deno']
-    : ['--js-runtimes', 'node'];
+  // Prefer lightweight Node.js engine (30MB) over heavyweight Deno (250MB) to prevent Render 512MB OOM
+  const jsRuntimeArgs = ['--js-runtimes', 'node,deno'];
   const potArgs = isSoundCloud ? [] : [
     '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
     '--extractor-args', 'youtube:player_client=mweb,web,ios',
@@ -2433,19 +2436,21 @@ app.post("/resolve", async (req, res) => {
 app.post("/restore", async (req, res) => {
   console.log("🔄 RESTORE command received");
   
-  if (queue.length > 0 && !isPlaying) {
+  if (isPlaying || isPreparingTrack || isTransitioning) {
+    return res.send({
+      status: "already_playing",
+      nowPlaying: currentTitle,
+      queueLength: queue.length
+    });
+  }
+
+  if (queue.length > 0) {
     await playNext();
     res.send({ 
       status: "restored",
       queueLength: queue.length,
       nowPlaying: currentTitle,
       message: "Playback restored from saved queue"
-    });
-  } else if (isPlaying) {
-    res.send({
-      status: "already_playing",
-      nowPlaying: currentTitle,
-      queueLength: queue.length
     });
   } else {
     res.send({
@@ -2468,6 +2473,10 @@ app.post("/clear", (req, res) => {
 });
 
 async function playNext() {
+  if (isPreparingTrack) {
+    console.log("⚠️ playNext called while already preparing track, skipping duplicate call");
+    return;
+  }
   const next = queue.shift();
   saveQueue();
   console.log("playNext called. Next item:", next);

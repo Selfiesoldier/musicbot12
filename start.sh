@@ -1,6 +1,5 @@
 #!/bin/bash
-set -e
-
+# set -e removed to guarantee 24/7 container uptime
 if [ -f "cookies.b64" ]; then
   echo "🍪 Restoring authenticated YouTube cookies..."
   base64 -d cookies.b64 > cookies.txt 2>/dev/null || true
@@ -24,6 +23,7 @@ fi
 
 export PORT="${PORT:-10000}"
 export NODE_OPTIONS="--max-old-space-size=160 --expose-gc"
+export DENO_V8_FLAGS="--max-old-space-size=48 --max-semi-space-size=1"
 export MUSIC_API_URL="http://127.0.0.1:${PORT}"
 export SERVER_URL="http://127.0.0.1:${PORT}"
 
