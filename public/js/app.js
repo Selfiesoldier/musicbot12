@@ -52,10 +52,15 @@ function toast(message, isError = false) {
 }
 
 async function fetchApi(endpoint, method = 'POST', body = null) {
+  const token = localStorage.getItem('admin_token') || '';
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   try {
     const res = await fetch(endpoint, {
       method,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
+      credentials: 'include',
       body: body ? JSON.stringify(body) : null
     });
     const data = await res.json();
@@ -83,18 +88,24 @@ async function fetchApi(endpoint, method = 'POST', body = null) {
 
 UI.loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
-  const pwd = document.getElementById('password').value;
+  const pwd = document.getElementById('password').value.trim();
   try {
-    await fetchApi('/api/login', 'POST', { password: pwd });
+    localStorage.setItem('admin_token', pwd);
+    const data = await fetchApi('/api/login', 'POST', { password: pwd });
+    if (data.token) localStorage.setItem('admin_token', data.token);
     UI.loginOverlay.classList.remove('active');
     UI.dashboard.classList.remove('hidden');
     startSSE();
     loadDashboardData();
-  } catch (err) {}
+  } catch (err) {
+    localStorage.removeItem('admin_token');
+  }
 });
 
-// Check if already authenticated via a quick API ping
-fetch('/api/config')
+// Check if already authenticated via a quick API ping (supports localStorage token)
+const existingToken = localStorage.getItem('admin_token') || '';
+const pingHeaders = existingToken ? { 'Authorization': `Bearer ${existingToken}` } : {};
+fetch('/api/config', { headers: pingHeaders, credentials: 'include' })
   .then(res => {
     if (res.ok) {
       UI.loginOverlay.classList.remove('active');
@@ -106,7 +117,9 @@ fetch('/api/config')
 
 function startSSE() {
   if (eventSource) return;
-  eventSource = new EventSource('/events');
+  const token = localStorage.getItem('admin_token') || '';
+  const sseUrl = token ? `/events?token=${encodeURIComponent(token)}` : '/events';
+  eventSource = new EventSource(sseUrl);
   
   eventSource.onmessage = (e) => {
     if (e.data === ':heartbeat') return; // ignore keepalive

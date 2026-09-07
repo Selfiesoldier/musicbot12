@@ -103,7 +103,7 @@ app.use(session({
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 5, // 5 requests per windowMs
+  max: 30, // 30 requests per windowMs
   message: { error: "Too many login attempts, please try again later." }
 });
 
@@ -129,10 +129,15 @@ const requireAuth = (req, res, next) => {
   
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    const token = authHeader.substring(7);
+    const token = authHeader.substring(7).trim();
     if (timingSafeCompare(token, ADMIN_PASSWORD)) {
       return next();
     }
+  }
+
+  const queryToken = (req.query.token || req.query.auth || '').trim();
+  if (queryToken && timingSafeCompare(queryToken, ADMIN_PASSWORD)) {
+    return next();
   }
   
   res.status(401).send({ error: "Unauthorized" });
@@ -270,7 +275,7 @@ app.post("/api/login", loginLimiter, (req, res) => {
   const { password } = req.body;
   if (password && timingSafeCompare(password, ADMIN_PASSWORD)) {
     req.session.authenticated = true;
-    res.send({ status: "ok" });
+    res.send({ status: "ok", token: ADMIN_PASSWORD });
   } else {
     res.status(401).send({ error: "Invalid password" });
   }
