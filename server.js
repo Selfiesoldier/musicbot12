@@ -1304,15 +1304,16 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = false
     : ['--js-runtimes', 'node'];
   const potArgs = isSoundCloud ? [] : [
     '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
-    '--extractor-args', 'youtube:player_client=android,ios',
+    '--extractor-args', 'youtube:player_client=mweb,web,ios',
   ];
-  const formatArg = isSoundCloud ? 'bestaudio/best' : 'ba[ext=m4a]/ba/b/best/18';
+  const formatArg = isSoundCloud ? 'bestaudio[protocol^=http]/bestaudio/best' : 'ba[ext=m4a]/ba/b/best/18';
 
   const ytdlpArgs = [
     '--force-ipv4',
     '--no-cache-dir',
     '--socket-timeout', '8',
-    '--retries', '2',
+    '--retries', '3',
+    '--concurrent-fragments', '5',
     ...jsRuntimeArgs,
     ...potArgs,
     '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
@@ -1336,13 +1337,13 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = false
     let errOutput = '';
     let isSettled = false;
 
-    // Hard timeout: 25s max for yt-dlp download
+    // Hard timeout: 65s max for yt-dlp download
     const downloadTimeout = setTimeout(() => {
       if (!isSettled && currentYtdlp) {
-        console.error(`⚠️ [Downloader] yt-dlp download timed out after 25s. Aborting download.`);
+        console.error(`⚠️ [Downloader] yt-dlp download timed out after 65s. Aborting download.`);
         try { currentYtdlp.kill('SIGKILL'); } catch (e) {}
       }
-    }, 25000);
+    }, 65000);
 
     const handleOutput = (d, isErr) => {
       const msg = d.toString();
