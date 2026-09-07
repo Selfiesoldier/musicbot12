@@ -117,10 +117,37 @@ class LiveLogManager extends EventEmitter {
 export const liveLogger = new LiveLogManager(1500);
 
 export function registerLiveLogs(app) {
-  // 1. Raw Text Log Stream (CLI / curl / terminal friendly)
-  app.get(['/logs/raw', '/api/logs/raw'], (req, res) => {
+  // 1. Raw Text Log Stream (CLI / curl / terminal / auto-refreshing in browser)
+  app.get(['/logs/raw', '/api/logs/raw', '/logs/tail'], (req, res) => {
+    // If live streaming / follow mode is requested, keep connection open like tail -f
+    if (req.query.live === '1' || req.query.follow === '1' || req.query.stream === '1' || req.path === '/logs/tail') {
+      res.writeHead(200, {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no'
+      });
+      const limit = parseInt(req.query.limit) || 300;
+      for (const l of liveLogger.getRecent(limit)) {
+        res.write(`[${l.time}] [${l.type.toUpperCase()}] ${l.text}\n`);
+      }
+      const listener = (entry) => {
+        res.write(`[${entry.time}] [${entry.type.toUpperCase()}] ${entry.text}\n`);
+      };
+      liveLogger.on('log', listener);
+      req.on('close', () => liveLogger.removeListener('log', listener));
+      return;
+    }
+
+    // Default: refresh every 1 second in browser unless explicitly disabled (?refresh=0)
+    const refreshSec = req.query.refresh !== undefined ? req.query.refresh : '1';
+    if (refreshSec && refreshSec !== '0' && refreshSec !== 'false' && refreshSec !== 'none') {
+      res.setHeader('Refresh', String(refreshSec));
+    }
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
     res.type('text/plain; charset=utf-8');
-    const limit = parseInt(req.query.limit) || 500;
+
+    const limit = parseInt(req.query.limit) || 400;
     const lines = liveLogger.getRecent(limit).map(l => `[${l.time}] [${l.type.toUpperCase()}] ${l.text}`);
     res.send(lines.join('\n') || 'No logs captured yet.');
   });
