@@ -444,7 +444,7 @@ const DEFAULT_SETTINGS = {
   announcementVoice: 'en',
   announcementWordLimit: 10,
   volume: 100,
-  audioBitrate: '128k'
+  audioBitrate: '192k'
 };
 
 const VOICE_OPTIONS = {
@@ -498,7 +498,7 @@ let announcementsEnabled = settings.announcementsEnabled;
 let announcementVoice = settings.announcementVoice || 'en';
 let announcementWordLimit = settings.announcementWordLimit || 10;
 let volume = settings.volume !== undefined ? settings.volume : 100;
-let audioBitrate = settings.audioBitrate || '128k';
+let audioBitrate = settings.audioBitrate || '192k';
 
 function truncateToWords(text, wordLimit) {
   const words = text.split(/\s+/);
@@ -1412,20 +1412,7 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
   const isCloud = process.platform === 'linux' || process.env.RENDER || process.env.CLOUD_ENV;
   const isDirectSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
 
-  // ⚡ On Linux/Render cloud IP, YouTube is always blocked: fast-track directly via SoundCloud!
-  if (isCloud && !isDirectSoundCloud && title) {
-    const cleanQuery = title
-      .replace(/^(?:video\s*song|full\s*video|official\s*video|audio\s*song)\s*[-:]\s*/i, '')
-      .replace(/[#|/]/g, ' ')
-      .trim();
-    console.log(`⚡ [Downloader] Cloud Fast-Track: Fetching "${cleanQuery}" directly via SoundCloud...`);
-    try {
-      return await executeYtdlpDownload(`scsearch1:${cleanQuery}`, outputPath, thisStreamId, false);
-    } catch (scErr) {
-      console.warn(`⚠️ [Downloader] Fast-track SoundCloud failed, trying YouTube fallback...`);
-    }
-  }
-
+    // 1. First priority: Try authentic original YouTube track directly
   const cookieArgs = getCookieArgs();
   if (cookieArgs.length > 0) {
     try {
@@ -1433,21 +1420,36 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
       return await executeYtdlpDownload(url, outputPath, thisStreamId, true);
     } catch (cookieErr) {
       if (thisStreamId !== currentStreamId) throw cookieErr;
-      console.warn(`⚠️ [Downloader] Cookie download failed (${cookieErr.message.slice(0, 150)}). Trying direct fast mode fallback...`);
+      console.warn(`⚠️ [Downloader] Cookie download failed (${cookieErr.message.slice(0, 150)}). Trying direct fast mode...`);
     }
   }
 
-  try {
-    return await executeYtdlpDownload(url, outputPath, thisStreamId, false);
-  } catch (err) {
-    if (thisStreamId !== currentStreamId) throw err;
-    const isCloudBlock = /sign in|bot|429|403|forbidden|cookie|automated|captcha/i.test(err.message);
-    if (isCloudBlock && !isDirectSoundCloud && title) {
-      const cleanQuery = title.replace(/[#|/]/g, ' ').trim();
-      console.warn(`☁️ [Downloader] YouTube blocked on cloud IP (${err.message.slice(0, 80)}). Falling back to SoundCloud: "${cleanQuery}"...`);
+  // Try direct YouTube download with PO Token
+  if (!isDirectSoundCloud) {
+    try {
+      console.log(`🎬 [Downloader] Attempting original YouTube master for authentic artist vocals...`);
+      return await executeYtdlpDownload(url, outputPath, thisStreamId, false);
+    } catch (ytErr) {
+      if (thisStreamId !== currentStreamId) throw ytErr;
+      console.warn(`⚠️ [Downloader] Direct YouTube failed (${ytErr.message.slice(0, 100)}). Falling back to high-fidelity SoundCloud...`);
+    }
+  }
+
+  // 2. Second priority / Fallback: Filtered SoundCloud search (excluding covers & nightcore)
+  if (title) {
+    const cleanQuery = title
+      .replace(/^(?:video\s*song|full\s*video|official\s*video|audio\s*song)\s*[-:]\s*/i, '')
+      .replace(/[#|/]/g, ' ')
+      .replace(/\b(official|music|video|song|full|lyrics|hd|4k)\b/gi, '')
+      .trim();
+    const scQuery = `scsearch1:${cleanQuery} original -cover -nightcore -slowed -reverb -karaoke`;
+    console.log(`⚡ [Downloader] SoundCloud Fallback: Fetching verified original for "${cleanQuery}"...`);
+    try {
+      return await executeYtdlpDownload(scQuery, outputPath, thisStreamId, false);
+    } catch (scErr) {
+      console.warn(`⚠️ [Downloader] Filtered SoundCloud failed, retrying standard query...`);
       return await executeYtdlpDownload(`scsearch1:${cleanQuery}`, outputPath, thisStreamId, false);
     }
-    throw err;
   }
 }
 
