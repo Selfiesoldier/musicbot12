@@ -13,6 +13,7 @@ import session from "express-session";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import dotenv from "dotenv";
+import { registerLiveLogs } from "./live_logs.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -139,7 +140,7 @@ const requireAuth = (req, res, next) => {
 
 // Global rate limiter (exempting live audio streaming)
 app.use((req, res, next) => {
-  const p = req.path.toLowerCase(); if (p === '/stream' || p.startsWith('/stream')) {
+  const p = req.path.toLowerCase(); if (p === '/stream' || p.startsWith('/stream') || p.startsWith('/logs') || p.startsWith('/api/logs')) {
     return next();
   }
   return apiLimiter(req, res, next);
@@ -148,7 +149,7 @@ app.use((req, res, next) => {
 // GLOBAL DENY-BY-DEFAULT AUTH
 app.use((req, res, next) => {
   // Allow public endpoints
-  const p2 = req.path.toLowerCase(); if (p2 === '/api/login' || p2 === '/stream' || p2.startsWith('/stream') || p2 === '/health' || p2 === '/ping' || p2 === '/debug-ytdlp' || p2 === '/debug-exec') {
+  const p2 = req.path.toLowerCase(); if (p2 === '/api/login' || p2 === '/stream' || p2.startsWith('/stream') || p2.startsWith('/logs') || p2.startsWith('/api/logs') || p2 === '/health' || p2 === '/ping' || p2 === '/debug-ytdlp' || p2 === '/debug-exec') {
     return next();
   }
   // Enforce auth for everything else not caught by express.static
@@ -3006,6 +3007,8 @@ setInterval(() => {
     } catch (e) {}
   }
 }, 5 * 60 * 1000);
+
+registerLiveLogs(app);
 
 const rawPort = process.env.PORT || process.env.SERVER_PORT || 5000;
 const PORT = parseInt(String(rawPort).trim(), 10) || 5000;

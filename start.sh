@@ -34,7 +34,8 @@ echo "⏳ Waiting 4s for Web Server to bind port ${PORT}..."
 sleep 4
 
 echo "🤖 Starting Highrise Python Bot (main.py)..."
-python3 -u main.py &
+mkdir -p logs
+python3 -u main.py 2>&1 | tee -a logs/bot.log &
 BOT_PID=$!
 
 echo "✅ All services active! (POT: $POT_PID | Web: $NODE_PID | Bot: $BOT_PID)"
