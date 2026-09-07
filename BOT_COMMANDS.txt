@@ -1,0 +1,237 @@
+================================================================================
+                    HIGHRISE MUSIC BOT - COMPLETE COMMAND LIST
+================================================================================
+
+================================================================================
+                              MUSIC COMMANDS
+================================================================================
+
+!play <song>              - Play a song (costs points, free for VIP)
+!dedicate @user <song>    - Dedicate a song to someone (costs points)
+!next / !skip             - Skip current song (starts vote for regular users)
+!instskip                 - Instant skip (costs 1000 points)
+!skipvote-                - Cancel active skip vote (Admin only)
+!stop                     - Stop playback and clear queue
+!clear                    - Clear the queue (costs points based on queue size)
+!current / !np            - Show currently playing song
+!queue / !q               - Show songs in queue
+!autoplay / !ap           - Toggle autoplay on/off (Admin only)
+!maxduration <seconds>    - Set max song duration limit (Admin only)
+!insert <song>            - Insert song to play next (Admin only)
+!modes                    - Show available music modes
+!mode <type>              - Switch music mode (e.g., !mode bollywood)
+!stream                   - Get raw stream link in DM
+!radiourl                 - Generate fresh radio URL (Admin only)
+!lyrics                   - Get lyrics search link for current song
+!music                    - Show music help/commands
+
+--------------------------------------------------------------------------------
+                          AUDIO SETTINGS (Admin Only)
+--------------------------------------------------------------------------------
+
+!quality <bitrate>        - Set audio quality (96k, 128k, 192k, 256k, 320k)
+!volume / !vol <0-200>    - Set volume level
+!announce+                - Enable TTS announcements
+!announce-                - Disable TTS announcements
+!announce                 - Show announcement status
+!voice <lang>             - Set TTS voice language
+!ttswords <limit>         - Set word limit for TTS announcements
+
+
+================================================================================
+                             ECONOMY COMMANDS
+================================================================================
+
+!balance / !points / !bal - Check your point balance
+!packs / !packages        - View available point packages
+!costs / !prices          - View command costs
+
+
+================================================================================
+                              SHOP COMMANDS
+================================================================================
+
+!buy <item>               - Search and buy items from shop
+!buy <number>             - Select item from search results
+!confirm                  - Confirm pending purchase
+!cancel                   - Cancel pending purchase
+
+
+================================================================================
+                             OUTFIT COMMANDS
+================================================================================
+
+!outfit / !outfits        - Show outfit menu/help
+!wear outfit <name>       - Wear a saved outfit preset
+!wear <category> <item>   - Wear specific item (e.g., !wear shirt blue_tee)
+!remove <category>        - Remove item from category
+!list [category]          - List available items in category
+!outfitlist / !presets    - Show saved outfit presets
+!clearoutfit              - Clear all worn items
+!syncoutfit               - Sync outfit with current avatar
+!skin <0-86>              - Change skin color
+!color <category> <0-255> - Change item color
+
+
+================================================================================
+                            PLAYLIST COMMANDS
+================================================================================
+
+!myplaylist               - View your playlists
+!playlist create <name>   - Create a new playlist
+!playlist delete <name>   - Delete a playlist
+!playlist rename <old> <new> - Rename a playlist
+!playlist show <name>     - Show songs in a playlist
+!playlist add <playlist> <song> - Add song to playlist
+!playlist remove <playlist> <index> - Remove song from playlist
+!confirmremove <number>   - Confirm song removal
+!playlist play <name>     - Start playing a playlist
+!playlist stop            - Stop playlist mode
+!playlist active          - Show currently active playlist
+!playlist info [name]     - Show playlist info
+!shufflepl <name>         - Shuffle and play a playlist
+
+
+================================================================================
+                         MODE MANAGEMENT (Admin Only)
+================================================================================
+
+!modehelp                 - Show mode management help
+!addmode <name> <display> <desc> - Create new music mode
+!addsongs <mode> <songs>  - Add songs to a mode
+!removesongs <mode> <songs> - Remove songs from a mode
+!modesongs <mode>         - List songs in a mode
+!listmodes                - List all available modes
+!deletemode <mode>        - Delete a music mode
+
+
+================================================================================
+                            ADMIN COMMANDS
+================================================================================
+
+!addadmin <username>      - Add a new admin (Owner only)
+!removeadmin <username>   - Remove an admin (Owner only)
+!addvip <username>        - Add VIP status to user
+!removevip <username>     - Remove VIP status from user
+!admins                   - List all admins
+!vips                     - List all VIPs
+!freemusic <minutes>      - Enable free music mode for X minutes
+!stopfreemusic            - Stop free music mode
+!admincmd                 - Show admin commands help
+!givepoints <pts> <user>  - Give points to user (or "all" for everyone)
+
+--------------------------------------------------------------------------------
+                          BOT CONTROL (Owner Only)
+--------------------------------------------------------------------------------
+
+!restartbot / !restart    - Restart the bot
+!restartserver            - Restart the music server
+!restartboth              - Restart both bot and server
+!connection               - Show connection status
+
+
+================================================================================
+                       BACKGROUND TASK MANAGER (Owner Only, DM)
+================================================================================
+
+!btm                      - Show BTM status
+!btm list                 - List all background tasks
+!btm start <task>         - Start a task
+!btm stop <task>          - Stop a task
+!btm restart <task>       - Restart a task
+!btm status <task>        - Show task status
+!btm help                 - Show BTM help
+
+
+================================================================================
+                           POSITION COMMANDS
+================================================================================
+
+!setmusicbot me           - Move bot to your position (Owner only)
+!setmusicbot X Y Z [facing] - Set bot default position (Owner only)
+!pstcmd                   - Show position commands help
+
+
+================================================================================
+                          SYSTEM INFO COMMANDS
+================================================================================
+
+!system / !sysinfo / !about / !info - Show bot system info
+!version / !ver / !v      - Show bot version
+!changelog / !updates     - Show recent changes
+!uptime                   - Show bot uptime
+!feedback <message>       - Send feedback to developers
+!reportbug / !bug <desc>  - Report a bug
+
+--------------------------------------------------------------------------------
+                        DIAGNOSTICS (Admin Only)
+--------------------------------------------------------------------------------
+
+!health / !status         - Show system health
+!ping / !latency          - Check bot latency
+!stats / !statistics      - Show bot statistics
+!feedbacklogs             - View all feedback submissions
+
+
+================================================================================
+                           MISC COMMANDS
+================================================================================
+
+!greet / !hello / !hi     - Get a greeting from the bot
+!whoami                   - Show your user info
+!testmsg                  - Test message formatting
+!testchunk                - Test message chunking (Admin)
+!testwhisper              - Test whisper functionality (Admin)
+
+
+================================================================================
+                              DM COMMANDS
+================================================================================
+
+When you DM the bot, you can use these keywords:
+
+help                      - Show help menu
+stream                    - Get stream link
+lyrics                    - Get lyrics for current song
+music                     - Show music commands
+
+
+================================================================================
+                            ACCESS LEVELS
+================================================================================
+
+OWNER:
+- Full access to all commands
+- Can add/remove admins
+- Can restart bot/server
+- Access to BTM (Background Task Manager)
+
+ADMIN:
+- Free music commands (no point cost)
+- Instant skip without voting
+- Queue management (!clear, !insert)
+- Audio settings (!volume, !quality, !announce)
+- Mode management
+- User management (!addvip, !removevip)
+- System diagnostics
+
+VIP:
+- Free music commands (no point cost)
+- Instant skip without voting
+- !clear with 1-hour cooldown
+
+REGULAR USER:
+- Music commands cost points
+- Skip starts a vote (40% needed)
+- Limited access to settings
+
+================================================================================
+                           POINT COSTS
+================================================================================
+
+Use !costs to see current pricing. Points can be obtained by:
+- Tipping gold to the bot
+- Purchasing point packages (!packs)
+- Receiving from admins (!givepoints)
+
+================================================================================

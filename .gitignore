@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+.local
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+venv312/
+ENV/
+env/
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Caches & Transients
+cache/
+tts_cache/
+scratch/
+logs/
+*.log
+*.tmp
+*.part
+--Frag*
+
+# Binaries
+yt-dlp
+yt-dlp.exe
+yt-dlp.exe.old
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Secrets & Environment
+.env
+.env.local
+cookies.master.txt
+cookies.txt
+www.youtube.com_cookies.txt
+
+# Backup files
+bot_old.py*

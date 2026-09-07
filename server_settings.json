@@ -1,0 +1,7 @@
+{
+  "announcementsEnabled": true,
+  "announcementVoice": "en",
+  "announcementWordLimit": 7,
+  "volume": 136,
+  "audioBitrate": "192k"
+}
