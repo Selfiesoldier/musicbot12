@@ -1,6 +1,11 @@
 #!/bin/bash
 set -e
 
+if [ -f "cookies.b64" ]; then
+  echo "🍪 Restoring authenticated YouTube cookies..."
+  base64 -d cookies.b64 > cookies.txt
+fi
+
 echo "=================================================="
 echo "🚀 Highrise Music Bot v2 (Docker / Render)"
 echo "=================================================="

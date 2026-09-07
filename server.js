@@ -378,6 +378,13 @@ async function ensureYtDlp() {
 }
 
 function getCookieArgs() {
+  if (!fs.existsSync(path.join(__dirname, 'cookies.txt')) && fs.existsSync(path.join(__dirname, 'cookies.b64'))) {
+    try {
+      const b64 = fs.readFileSync(path.join(__dirname, 'cookies.b64'), 'utf8');
+      fs.writeFileSync(path.join(__dirname, 'cookies.txt'), Buffer.from(b64, 'base64').toString('utf8'), 'utf8');
+      console.log('🍪 [CookieEngine] Restored cookies.txt from cookies.b64');
+    } catch(e) {}
+  }
   const dirs = [__dirname, process.cwd(), '/home/container', path.join('/home/container', 'musicbot-main')];
   const searchNames = [
     'cookies.master.txt', 'cookies.txt', 'cookies .txt', 'www.youtube.com_cookies.txt', 'youtube.com_cookies.txt',
@@ -1300,7 +1307,7 @@ function killCurrentStream() {
   streamManager.clearAudioBuffer();
 }
 
-function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = false) {
+function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true) {
   const cookieArgs = withCookies ? getCookieArgs() : [];
   const proxyArgs = getProxyArgs();
   const isSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
@@ -1311,7 +1318,7 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = false
     '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
     '--extractor-args', 'youtube:player_client=mweb,web,ios',
   ];
-  const formatArg = isSoundCloud ? 'bestaudio[protocol^=http]/bestaudio/best' : 'ba[ext=m4a]/ba/b/best/18';
+  const formatArg = isSoundCloud ? 'bestaudio[protocol^=http]/bestaudio/best' : 'ba[ext=m4a]/ba[ext=webm]/bestaudio/best/18';
 
   const ytdlpArgs = [
     '--force-ipv4',
@@ -1414,33 +1421,27 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = false
 }
 
 async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
-  const isCloud = process.platform === 'linux' || process.env.RENDER || process.env.CLOUD_ENV;
   const isDirectSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
 
-    // 1. First priority: Try authentic original YouTube track directly
-  const cookieArgs = getCookieArgs();
-  if (cookieArgs.length > 0) {
-    try {
-      console.log(`🔑 [Downloader] Found cookies, executing cookie-authenticated download...`);
-      return await executeYtdlpDownload(url, outputPath, thisStreamId, true);
-    } catch (cookieErr) {
-      if (thisStreamId !== currentStreamId) throw cookieErr;
-      console.warn(`⚠️ [Downloader] Cookie download failed (${cookieErr.message.slice(0, 150)}). Trying direct fast mode...`);
-    }
-  }
-
-  // Try direct YouTube download with PO Token
+  // 1. YouTube is the absolute primary source with authenticated cookies
   if (!isDirectSoundCloud) {
     try {
-      console.log(`🎬 [Downloader] Attempting original YouTube master for authentic artist vocals...`);
-      return await executeYtdlpDownload(url, outputPath, thisStreamId, false);
+      console.log(`🎬 [Downloader] Fetching studio audio directly from YouTube with authenticated cookies...`);
+      return await executeYtdlpDownload(url, outputPath, thisStreamId, true);
     } catch (ytErr) {
       if (thisStreamId !== currentStreamId) throw ytErr;
-      console.warn(`⚠️ [Downloader] Direct YouTube failed (${ytErr.message.slice(0, 100)}). Falling back to high-fidelity SoundCloud...`);
+      console.warn(`⚠️ [Downloader] Authenticated YouTube download failed: ${ytErr.message.slice(0, 120)}`);
+      try {
+        console.log(`🔄 [Downloader] Retrying YouTube in direct fast mode with Botguard PO Token...`);
+        return await executeYtdlpDownload(url, outputPath, thisStreamId, false);
+      } catch (retryErr) {
+        if (thisStreamId !== currentStreamId) throw retryErr;
+        console.warn(`⚠️ [Downloader] Direct YouTube failed: ${retryErr.message.slice(0, 120)}`);
+      }
     }
   }
 
-  // 2. Second priority / Fallback: Filtered SoundCloud search (excluding covers & nightcore)
+  // 2. Only if YouTube is completely unreachable and title exists, use clean verified SoundCloud fallback
   if (title) {
     const cleanQuery = title
       .replace(/^(?:video\s*song|full\s*video|official\s*video|audio\s*song)\s*[-:]\s*/i, '')
@@ -1448,7 +1449,7 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
       .replace(/\b(official|music|video|song|full|lyrics|hd|4k)\b/gi, '')
       .trim();
     const scQuery = `scsearch1:${cleanQuery} original -cover -nightcore -slowed -reverb -karaoke`;
-    console.log(`⚡ [Downloader] SoundCloud Fallback: Fetching verified original for "${cleanQuery}"...`);
+    console.log(`⚡ [Downloader] SoundCloud Fallback: Fetching original audio for "${cleanQuery}"...`);
     try {
       return await executeYtdlpDownload(scQuery, outputPath, thisStreamId, false);
     } catch (scErr) {
