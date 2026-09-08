@@ -2045,12 +2045,8 @@ app.post("/play", async (req, res) => {
         streamVersion: streamVersion
       });
     } else {
-      isPreparingTrack = true;
-      isTransitioning = true;
       playNext().catch(playErr => {
         console.error("Background playNext error:", playErr);
-        isPreparingTrack = false;
-        isTransitioning = false;
       });
       res.send({ 
         status: "playing", 
@@ -2124,12 +2120,8 @@ app.post("/insert", async (req, res) => {
         streamVersion: streamVersion
       });
     } else {
-      isPreparingTrack = true;
-      isTransitioning = true;
       playNext().catch(playErr => {
         console.error("Background playNext error in /insert:", playErr);
-        isPreparingTrack = false;
-        isTransitioning = false;
       });
       res.send({ 
         status: "playing", 
@@ -2486,12 +2478,19 @@ app.post("/clear", (req, res) => {
   });
 });
 
+let isPlayNextLocked = false;
 async function playNext() {
-  if (isPreparingTrack) {
-    console.log("⚠️ playNext called while already preparing track, skipping duplicate call");
+  if (isPlayNextLocked) {
+    console.log("⚠️ playNext already executing, skipping duplicate concurrent invocation");
     return;
   }
-  const next = queue.shift();
+  isPlayNextLocked = true;
+  let next;
+  try {
+    next = queue.shift();
+  } finally {
+    isPlayNextLocked = false;
+  }
   saveQueue();
   console.log("playNext called. Next item:", next);
   
