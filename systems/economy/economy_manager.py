@@ -20,11 +20,14 @@ class EconomyManager:
     # VIP clear command tracking (user_id: timestamp)
     vip_clear_usage = {}
     
-    def __init__(self, balance_file="systems/economy/data/user_balances.json"):
+    def __init__(self, balance_file="systems/economy/data/user_balances.json", daily_file="systems/economy/data/daily_claims.json"):
         self.balance_file = balance_file
+        self.daily_file = daily_file
         self.balances = {}  # In-memory cache: {user_id: points}
+        self.daily_claims = {}  # {user_id: {"timestamp": float, "amount": int, "username": str}}
         self.lock = asyncio.Lock()  # For thread-safe operations
         self.load_balances()
+        self.load_daily_claims()
     
     def load_balances(self):
         """Load user balances from file"""
@@ -184,3 +187,70 @@ class EconomyManager:
         """Record that VIP used clear command"""
         import time
         self.vip_clear_usage[str(user_id)] = time.time()
+
+    def load_daily_claims(self):
+        """Load daily claims from file"""
+        try:
+            if os.path.exists(self.daily_file):
+                with open(self.daily_file, 'r', encoding='utf-8') as f:
+                    self.daily_claims = json.load(f)
+                print(f"✅ Loaded {len(self.daily_claims)} daily claim records")
+            else:
+                self.daily_claims = {}
+        except Exception as e:
+            print(f"⚠️ Error loading daily claims: {e}")
+            self.daily_claims = {}
+
+    def save_daily_claims(self):
+        """Save daily claims to file"""
+        try:
+            Path(self.daily_file).parent.mkdir(parents=True, exist_ok=True)
+            with open(self.daily_file, 'w', encoding='utf-8') as f:
+                json.dump(self.daily_claims, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"❌ Error saving daily claims: {e}")
+            return False
+
+    async def claim_daily(self, user_id, username=""):
+        """
+        Claim daily tickets (10 to 50 tickets once every 24 hours).
+        Returns tuple: (success, tickets_awarded, new_balance, remaining_seconds)
+        """
+        import time
+        import random
+        
+        async with self.lock:
+            user_id_str = str(user_id)
+            now = time.time()
+            cooldown = 86400  # 24 hours in seconds
+            
+            if user_id_str in self.daily_claims:
+                last_claim_time = self.daily_claims[user_id_str].get("timestamp", 0)
+                time_passed = now - last_claim_time
+                if time_passed < cooldown:
+                    remaining = cooldown - time_passed
+                    current_balance = self.balances.get(user_id_str, 0)
+                    return False, 0, current_balance, remaining
+            
+            # Award random tickets between 10 and 50
+            tickets = random.randint(10, 50)
+            
+            # Add to balance
+            current = self.balances.get(user_id_str, 0)
+            self.balances[user_id_str] = current + tickets
+            self.save_balances()
+            new_balance = self.balances[user_id_str]
+            
+            # Record claim
+            self.daily_claims[user_id_str] = {
+                "timestamp": now,
+                "amount": tickets,
+                "username": username or ""
+            }
+            self.save_daily_claims()
+            
+            write_economy_log(user_id, "daily", tickets, new_balance, f"Daily reward (+{tickets} tickets)")
+            print(f"🎁 User {user_id} ({username}) claimed daily reward: +{tickets} tickets. New balance: {new_balance}")
+            
+            return True, tickets, new_balance, 0

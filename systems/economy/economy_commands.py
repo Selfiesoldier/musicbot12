@@ -52,6 +52,33 @@ def register(bot):
         await asyncio.sleep(0.5)
         await bot.send_message(pack_msg3, user.id)
     
+
+    @bot.command("daily", "claim")
+    async def daily_cmd(bot, user, message):
+        remaining_cd = check_cd(user.id, "daily_cmd", 3)
+        if remaining_cd > 0:
+            await bot.send_message(MessageFormatter.cooldown(remaining_cd), user.id)
+            return
+        
+        success, tickets, balance, remaining_sec = await bot.economy.claim_daily(user.id, user.username)
+        
+        if not success:
+            hours = int(remaining_sec // 3600)
+            mins = int((remaining_sec % 3600) // 60)
+            msg = (
+                f"{Colors.ORANGE}⏳ Daily already claimed!\n"
+                f"{Colors.LIGHT_GRAY}Next reward in: {Colors.GOLD}{hours}h {mins}m\n"
+                f"{Colors.SKY_BLUE}🎟️ Balance: {Colors.GOLD}{balance} pts"
+            )
+            await bot.send_message(msg, user.id)
+        else:
+            msg = (
+                f"{Colors.GOLD}🎁 {Colors.PINK}@{user.username} {Colors.MINT}claimed their daily reward!\n"
+                f"{Colors.YELLOW}🎟️ +{tickets} tickets {Colors.LIGHT_GRAY}• {Colors.GOLD}{balance} total pts\n"
+                f"{Colors.SKY_BLUE}💡 Use /daily once every 24 hours!"
+            )
+            await bot.highrise.chat(msg)
+
     @bot.command("costs", "prices")
     async def costs_cmd(bot, user, message):
         remaining = check_cd(user.id, "costs", 3)

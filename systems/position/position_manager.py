@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -132,29 +133,36 @@ class PositionManager:
         return self.default_position is not None
 
     @staticmethod
-    async def move_bot_to(bot, destination: PositionType) -> bool:
-        """Move the bot to a Position or AnchorPosition safely."""
+    async def move_bot_to(bot, destination: PositionType, retries: int = 3) -> bool:
+        """Move the bot to a Position or AnchorPosition safely with retry logic."""
         if not bot or not bot.bot_user_id or not destination:
             return False
         
-        if isinstance(destination, AnchorPosition):
-            try:
-                await bot.highrise.walk_to(destination)
-                return True
-            except Exception as e:
-                print(f"⚠️ Failed to walk to anchor point: {e}")
-                return False
-        elif isinstance(destination, Position):
-            try:
-                await bot.highrise.teleport(bot.bot_user_id, destination)
-                return True
-            except Exception as e:
+        for attempt in range(retries):
+            if isinstance(destination, AnchorPosition):
                 try:
                     await bot.highrise.walk_to(destination)
                     return True
-                except Exception as walk_e:
-                    print(f"⚠️ Failed to teleport/walk to position: {e} / {walk_e}")
+                except Exception as e:
+                    if attempt < retries - 1:
+                        await asyncio.sleep(1.0)
+                        continue
+                    print(f"⚠️ Failed to walk to anchor point: {e}")
                     return False
+            elif isinstance(destination, Position):
+                try:
+                    await bot.highrise.teleport(bot.bot_user_id, destination)
+                    return True
+                except Exception as e:
+                    try:
+                        await bot.highrise.walk_to(destination)
+                        return True
+                    except Exception as walk_e:
+                        if attempt < retries - 1:
+                            await asyncio.sleep(1.0)
+                            continue
+                        print(f"⚠️ Failed to teleport/walk to position: {e} / {walk_e}")
+                        return False
         return False
 
     async def ensure_home_position(self, bot) -> bool:

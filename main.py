@@ -262,17 +262,20 @@ class MusicBot(BaseBot):
             except Exception as e:
                 print(f"⚠️ Failed to sync outfit from Highrise: {e}")
         
-        # Move to default position / anchor
+        # Move to default position / anchor with resilient startup docking
         if self.position_manager.has_position():
-            try:
-                await self.position_manager.ensure_home_position(self)
-                default_pos = self.position_manager.get_position()
-                if isinstance(default_pos, AnchorPosition):
-                    print(f"⚓ Bot anchored to furniture: {default_pos.entity_id} #{default_pos.anchor_ix}")
-                elif isinstance(default_pos, Position):
-                    print(f"🚶 Bot moved to default position: ({default_pos.x}, {default_pos.y}, {default_pos.z})")
-            except Exception as e:
-                print(f"⚠️ Failed to move to default position: {e}")
+            async def _startup_dock():
+                await asyncio.sleep(2.5)
+                try:
+                    await self.position_manager.ensure_home_position(self)
+                    default_pos = self.position_manager.get_position()
+                    if isinstance(default_pos, AnchorPosition):
+                        print(f"⚓ Bot anchored to furniture: {default_pos.entity_id} #{default_pos.anchor_ix}")
+                    elif isinstance(default_pos, Position):
+                        print(f"🚶 Bot moved to default position: ({default_pos.x}, {default_pos.y}, {default_pos.z})")
+                except Exception as e:
+                    print(f"⚠️ Failed to move to default position: {e}")
+            asyncio.create_task(_startup_dock())
         
         # Try to restore saved queue from music server
         try:
