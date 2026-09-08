@@ -14,7 +14,7 @@ if [ -f "/app/pot-provider/build/main.js" ]; then
   echo "🛡️ [POT Provider] Starting local Botguard PO Token server on port 4416..."
   (
     while true; do
-      PORT=4416 NODE_OPTIONS="--max-old-space-size=64" node /app/pot-provider/build/main.js --port 4416 || true
+      PORT=4416 NODE_OPTIONS="--max-old-space-size=48" node /app/pot-provider/build/main.js --port 4416 || true
       echo "⚠️ [POT Provider] Process stopped, restarting in 3s..."
       sleep 3
     done
@@ -22,7 +22,7 @@ if [ -f "/app/pot-provider/build/main.js" ]; then
 fi
 
 export PORT="${PORT:-10000}"
-export NODE_OPTIONS="--max-old-space-size=160 --expose-gc"
+export NODE_OPTIONS="--max-old-space-size=64 --expose-gc"
 export DENO_V8_FLAGS="--max-old-space-size=48 --max-semi-space-size=1"
 export MUSIC_API_URL="http://127.0.0.1:${PORT}"
 export SERVER_URL="http://127.0.0.1:${PORT}"

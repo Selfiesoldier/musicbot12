@@ -1172,6 +1172,30 @@ try {
 } catch (e) {}
 let currentLocalFilePath = null;
 
+// 🧹 Auto-prune cache directory to prevent Linux page-cache and disk bloat (cgroup OOM prevention)
+function pruneStaleCacheFiles(keepFile = null) {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) return;
+    const files = fs.readdirSync(CACHE_DIR);
+    const keepBasename = keepFile ? path.basename(keepFile) : null;
+    let prunedCount = 0;
+    for (const f of files) {
+      if (f.endsWith('.m4a') || f.endsWith('.part') || f.endsWith('.ytdl')) {
+        if (f !== keepBasename && !f.includes('transition')) {
+          try {
+            fs.unlinkSync(path.join(CACHE_DIR, f));
+            prunedCount++;
+          } catch (e) {}
+        }
+      }
+    }
+    if (prunedCount > 0) {
+      console.log(`🧹 [MemoryGuard] Pruned ${prunedCount} stale audio cache files from disk`);
+    }
+  } catch (e) {}
+}
+
+
 const streamManager = new PersistentStreamManager();
 
 function loadQueue() {
@@ -1327,6 +1351,8 @@ async function getVideoMetadata(url) {
 }
 
 function killCurrentStream() {
+  // Free memory immediately after stream termination
+  if (typeof global.gc === 'function') { try { global.gc(); } catch (e) {} }
   currentStreamId++;
   if (currentYtdlp && currentDecoder) {
     try {
@@ -1384,7 +1410,7 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
   const proxyArgs = getProxyArgs();
   const isSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
   // Prefer lightweight Node.js engine (30MB) over heavyweight Deno (250MB) to prevent Render 512MB OOM
-  const jsRuntimeArgs = ['--js-runtimes', 'node,deno'];
+  const jsRuntimeArgs = ['--no-js-runtimes', '--js-runtimes', 'node'];
   const potArgs = isSoundCloud ? [] : [
     '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
     '--extractor-args', 'youtube:player_client=visionos,android',
@@ -1550,6 +1576,7 @@ async function startStream(url, title, metadata) {
 
   const localFilePath = path.join(CACHE_DIR, `track_${thisStreamId}.m4a`);
   currentLocalFilePath = localFilePath;
+  pruneStaleCacheFiles(localFilePath);
 
   // 1. Start downloading complete track file in background IMMEDIATELY
   const downloadPromise = downloadTrackToFile(url, localFilePath, thisStreamId, title).catch(err => {
@@ -3095,6 +3122,25 @@ setInterval(() => {
     } catch (e) {}
   }
 }, 5 * 60 * 1000);
+
+
+// 🛡️ High-Frequency Memory Guard & Aggressive Garbage Collection
+setInterval(() => {
+  if (typeof global.gc === 'function') {
+    try {
+      global.gc();
+    } catch (e) {}
+  }
+  const mem = process.memoryUsage();
+  const rssMb = (mem.rss / 1024 / 1024).toFixed(1);
+  const heapMb = (mem.heapUsed / 1024 / 1024).toFixed(1);
+  // Only log if RSS exceeds 100MB as an early warning
+  if (mem.rss > 100 * 1024 * 1024) {
+    console.warn(`⚠️ [MemoryGuard] Elevated Node memory: RSS ${rssMb}MB, Heap ${heapMb}MB - running cleanup...`);
+    pruneStaleCacheFiles(currentLocalFilePath);
+    if (typeof global.gc === 'function') global.gc();
+  }
+}, 30000);
 
 registerLiveLogs(app);
 
