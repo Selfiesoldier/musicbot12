@@ -164,7 +164,7 @@ app.use((req, res, next) => {
 // GLOBAL DENY-BY-DEFAULT AUTH
 app.use((req, res, next) => {
   // Allow public endpoints
-  const p2 = req.path.toLowerCase(); if (p2 === '/api/login' || p2 === '/stream' || p2.startsWith('/stream') || p2.startsWith('/logs') || p2.startsWith('/api/logs') || p2 === '/health' || p2 === '/ping' || p2 === '/debug-ytdlp' || p2 === '/debug-exec') {
+  const p2 = req.path.toLowerCase(); if (p2 === '/api/login' || p2 === '/stream' || p2.startsWith('/stream') || p2.startsWith('/logs') || p2.startsWith('/api/logs') || p2 === '/health' || p2 === '/ping' || p2 === '/debug-ytdlp' || p2 === '/debug-exec' || p2.startsWith('/api/register-bridge') || p2.startsWith('/api/bridge')) {
     return next();
   }
   // Enforce auth for everything else not caught by express.static
