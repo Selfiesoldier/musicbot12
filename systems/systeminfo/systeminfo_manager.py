@@ -389,7 +389,7 @@ class SystemInfoManager:
     async def notify_owner(self, bot_instance, message: str):
         """Send notification to bot owner via DM"""
         try:
-            owner_username = "paul_sanif"
+            owner_username = "_paul_sanif_"
             notification = f"🔔 System Notification\n\n{message}"
             
             # Try to send DM to owner

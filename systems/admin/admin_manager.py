@@ -9,8 +9,8 @@ class AdminManager:
     """Manages admin permissions and VIP access"""
     
     # Default owners list
-    DEFAULT_OWNERS = ["paul_sanif", "692dbdef5b2eb22b61d96993"]
-    OWNER_USERNAME = "paul_sanif"
+    DEFAULT_OWNERS = ["_paul_sanif_", "paul_sanif", "692dbdef5b2eb22b61d96993"]
+    OWNER_USERNAME = "_paul_sanif_"
     
     def __init__(self, admin_file="systems/admin/data/admins.json"):
         self.admin_file = admin_file
