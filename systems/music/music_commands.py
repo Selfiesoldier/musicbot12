@@ -681,10 +681,10 @@ def register(bot):
                 
                 try:
                     song_info = BeautifulMessages.now_playing(
-                        metadata['title'],
-                        metadata['artist'],
-                        metadata['duration'],
-                        metadata['views'],
+                        metadata.get('title', 'Unknown Track'),
+                        metadata.get('artist', 'Unknown Artist'),
+                        metadata.get('duration', 'Unknown'),
+                        metadata.get('views', 'N/A'),
                         queue_len,
                         is_autoplay=is_autoplay,
                         requester=requester,
