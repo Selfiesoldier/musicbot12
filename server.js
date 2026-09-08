@@ -1408,7 +1408,7 @@ function killCurrentStream() {
 function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true) {
   const cookieArgs = withCookies ? getCookieArgs() : [];
   const proxyArgs = getProxyArgs();
-  const isSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
+  const isSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch');
   // Prefer lightweight Node.js engine (30MB) over heavyweight Deno (250MB) to prevent Render 512MB OOM
   const jsRuntimeArgs = ['--no-js-runtimes', '--js-runtimes', 'node'];
   const potArgs = isSoundCloud ? [] : [
