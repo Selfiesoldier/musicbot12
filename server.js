@@ -1420,13 +1420,13 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
     let errOutput = '';
     let isSettled = false;
 
-    // Hard timeout: 25s max for yt-dlp download
+    // Hard timeout: 45s max for yt-dlp download
     const downloadTimeout = setTimeout(() => {
       if (!isSettled && currentYtdlp) {
-        console.error(`⚠️ [Downloader] yt-dlp download timed out after 25s. Aborting download.`);
+        console.error(`⚠️ [Downloader] yt-dlp download timed out after 45s. Aborting download.`);
         try { currentYtdlp.kill('SIGKILL'); } catch (e) {}
       }
-    }, 25000);
+    }, 45000);
 
     const handleOutput = (d, isErr) => {
       const msg = d.toString();
