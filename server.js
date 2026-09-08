@@ -1387,9 +1387,9 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
   const jsRuntimeArgs = ['--js-runtimes', 'node,deno'];
   const potArgs = isSoundCloud ? [] : [
     '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
-    '--extractor-args', 'youtube:player_client=mweb,web,ios',
+    '--extractor-args', 'youtube:player_client=visionos,android',
   ];
-  const formatArg = 'bestaudio/best';
+  const formatArg = 'bestaudio/ba/b/best';
 
   const ytdlpArgs = [
     '--force-ipv4',
@@ -1420,13 +1420,13 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
     let errOutput = '';
     let isSettled = false;
 
-    // Hard timeout: 65s max for yt-dlp download
+    // Hard timeout: 25s max for yt-dlp download
     const downloadTimeout = setTimeout(() => {
       if (!isSettled && currentYtdlp) {
-        console.error(`⚠️ [Downloader] yt-dlp download timed out after 65s. Aborting download.`);
+        console.error(`⚠️ [Downloader] yt-dlp download timed out after 25s. Aborting download.`);
         try { currentYtdlp.kill('SIGKILL'); } catch (e) {}
       }
-    }, 65000);
+    }, 25000);
 
     const handleOutput = (d, isErr) => {
       const msg = d.toString();
@@ -1494,20 +1494,23 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
 async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
   const isDirectSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
 
-  // 1. YouTube is the absolute primary source with authenticated cookies
+  // 1. Primary: Direct YouTube with visionos/android client & PO token (avoids web SABR/ad format blocks)
   if (!isDirectSoundCloud) {
     try {
-      console.log(`🎬 [Downloader] Fetching studio audio directly from YouTube with authenticated cookies...`);
-      return await executeYtdlpDownload(url, outputPath, thisStreamId, true);
+      console.log(`🎬 [Downloader] Fetching studio audio directly from YouTube (visionos/android)...`);
+      return await executeYtdlpDownload(url, outputPath, thisStreamId, false);
     } catch (ytErr) {
       if (thisStreamId !== currentStreamId) throw ytErr;
-      console.warn(`⚠️ [Downloader] Authenticated YouTube download failed: ${ytErr.message.slice(0, 120)}`);
-      try {
-        console.log(`🔄 [Downloader] Retrying YouTube in direct fast mode with Botguard PO Token...`);
-        return await executeYtdlpDownload(url, outputPath, thisStreamId, false);
-      } catch (retryErr) {
-        if (thisStreamId !== currentStreamId) throw retryErr;
-        console.warn(`⚠️ [Downloader] Direct YouTube failed: ${retryErr.message.slice(0, 120)}`);
+      console.warn(`⚠️ [Downloader] Direct YouTube failed: ${ytErr.message.slice(0, 120)}`);
+      const cookieArgs = getCookieArgs();
+      if (cookieArgs.length > 0) {
+        try {
+          console.log(`🔄 [Downloader] Retrying YouTube with authenticated cookies...`);
+          return await executeYtdlpDownload(url, outputPath, thisStreamId, true);
+        } catch (retryErr) {
+          if (thisStreamId !== currentStreamId) throw retryErr;
+          console.warn(`⚠️ [Downloader] Cookie YouTube failed: ${retryErr.message.slice(0, 120)}`);
+        }
       }
     }
   }
