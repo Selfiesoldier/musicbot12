@@ -902,7 +902,7 @@ class PersistentStreamManager {
       this.stopSilenceFeed();
     }
 
-    const TARGET_LEAD_MS = 250;
+    const TARGET_LEAD_MS = 2500; // 2.5s lead cushion prevents buffer starvation
     const chunkSize = 8820; // 50ms of 44.1kHz 16-bit stereo PCM
     let offset = 0;
     const startTime = Date.now();
@@ -1850,9 +1850,9 @@ async function startStream(url, title, metadata) {
   let decoderFinished = false;
   let totalBytesDecoded = 0;
 
-  // Maximum PCM buffer: 10 seconds (~1.76 MB), resume at 3 seconds (~528 KB)
-  const MAX_ACCUM_BYTES = CHUNK_SIZE * 200;
-  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 60;
+  // Maximum PCM buffer: 30 seconds (~5.29 MB), resume at 10 seconds (~1.76 MB)
+  const MAX_ACCUM_BYTES = CHUNK_SIZE * 600;
+  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 200;
 
   let lastPcmReceivedAt = Date.now();
 
@@ -1928,7 +1928,7 @@ async function startStream(url, title, metadata) {
   savePlaybackState();
   broadcastEvent();
 
-  const TARGET_LEAD_MS = 250;
+  const TARGET_LEAD_MS = 2500; // 2.5s lead cushion keeps audio smooth during CPU spikes and searches
   const pacingStartTime = Date.now();
   let bytesSent = 0;
 
@@ -1937,7 +1937,7 @@ async function startStream(url, title, metadata) {
     : (currentMetadata && currentMetadata.durationSeconds ? Number(currentMetadata.durationSeconds) : 0);
   const maxAllowedDurationMs = expectedDurationSec > 0 ? (expectedDurationSec + 8) * 1000 : 0;
 
-  console.log(`🔊 [Playing] Continuous 1.0x frame-accurate playback active!`);
+  console.log(`🔊 [Playing] Continuous 1.0x frame-accurate playback active (2.5s lead cushion)!`);
 
   // Stream in steady, frame-aligned 50ms chunks using self-correcting lead cushion
   while (thisStreamId === currentStreamId) {
@@ -1951,10 +1951,11 @@ async function startStream(url, title, metadata) {
         if (currentDecoder && currentDecoder.stdout && !currentDecoder.stdout.destroyed) {
           currentDecoder.stdout.resume();
           isDecoderPaused = false;
+          lastPcmReceivedAt = Date.now(); // Reset timer upon resuming stdout
         }
       }
 
-      // Maintain an exact 250ms lead cushion ahead of wall-clock real time
+      // Maintain a steady 2500ms lead cushion ahead of wall-clock real time
       const audioDurationSentMs = (bytesSent / 176400) * 1000;
       const realTimeElapsedMs = Date.now() - pacingStartTime;
       const leadMs = audioDurationSentMs - realTimeElapsedMs;
@@ -1974,9 +1975,11 @@ async function startStream(url, title, metadata) {
       pcmBuffer = Buffer.alloc(0);
       break; // All audio completely fed to persistent encoder!
     } else {
-      // 2. Decoder stall watchdog: if no new data arrived for 8s and buffer is low
-      if (Date.now() - lastPcmReceivedAt > 8000) {
-        console.warn(`⚠️ [Decoder Watchdog] Decoder stalled with no new audio for 8s. Finishing track.`);
+      // 2. Decoder stall watchdog: only check if decoder is unpaused, not finished, and buffer is truly starved
+      if (isDecoderPaused) {
+        lastPcmReceivedAt = Date.now(); // Never count paused buffering time as a stall
+      } else if (!decoderFinished && Date.now() - lastPcmReceivedAt > 15000) {
+        console.warn(`⚠️ [Decoder Watchdog] Decoder stalled with no new audio for 15s. Finishing track.`);
         if (pcmBuffer.length >= 4) {
           const validLen = pcmBuffer.length - (pcmBuffer.length % 4);
           streamManager.feedPCMAudio(pcmBuffer.subarray(0, validLen));
@@ -3288,23 +3291,22 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 
-// 🛡️ High-Frequency Memory Guard & Aggressive Garbage Collection
+// 🛡️ Memory Guard - Periodically check memory without stalling the audio thread
 setInterval(() => {
-  if (typeof global.gc === 'function') {
-    try {
-      global.gc();
-    } catch (e) {}
-  }
   const mem = process.memoryUsage();
   const rssMb = (mem.rss / 1024 / 1024).toFixed(1);
   const heapMb = (mem.heapUsed / 1024 / 1024).toFixed(1);
-  // Only log if RSS exceeds 100MB as an early warning
-  if (mem.rss > 100 * 1024 * 1024) {
-    console.warn(`⚠️ [MemoryGuard] Elevated Node memory: RSS ${rssMb}MB, Heap ${heapMb}MB - running cleanup...`);
+  // Only trigger GC and cache cleanup if memory is critically high (> 380MB RSS or > 160MB heap)
+  if (mem.rss > 380 * 1024 * 1024 || mem.heapUsed > 160 * 1024 * 1024) {
+    console.warn(`⚠️ [MemoryGuard] Critically elevated Node memory: RSS ${rssMb}MB, Heap ${heapMb}MB - running cleanup...`);
     pruneStaleCacheFiles(currentLocalFilePath);
-    if (typeof global.gc === 'function') global.gc();
+    if (typeof global.gc === 'function') {
+      try {
+        global.gc();
+      } catch (e) {}
+    }
   }
-}, 30000);
+}, 120000);
 
 registerLiveLogs(app);
 
