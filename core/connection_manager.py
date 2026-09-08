@@ -124,7 +124,11 @@ class ConnectionManager:
                     ws = getattr(self.bot._core_highrise, 'ws', None)
                 
                 if ws is None or ws.closed:
-                    raise ConnectionResetError("WebSocket connection is closed or unavailable")
+                    print("⚡ [ConnectionManager] Underlying WebSocket is closed - triggering instant reconnect...")
+                    write_system_log("Underlying WebSocket closed - triggering instant reconnect")
+                    self.restart_reason = "Underlying WebSocket transport closed"
+                    self.restart_event.set()
+                    return
                 
                 # 2. Send the serialized raw KeepaliveRequest packet directly to wss://highrise.game/web/botapi
                 await ws.send_json({"_type": "KeepaliveRequest"})

@@ -75,7 +75,14 @@ class MessageChunker:
         chunks = MessageChunker.chunk_message(message, max_length)
 
         for i, chunk in enumerate(chunks):
-            await highrise_client.chat(chunk)
+            try:
+                await highrise_client.chat(chunk)
+            except (ConnectionResetError, OSError, Exception) as chat_err:
+                err_str = str(chat_err).lower()
+                if "closing transport" in err_str or "connection" in err_str or "closed" in err_str:
+                    print(f"⚠️ [Chat] Transport closed while sending message, skipped cleanly ({chat_err})")
+                    return i
+                raise
             # Add delay between chunks (except after the last one)
             if i < len(chunks) - 1:
                 await asyncio.sleep(MessageChunker.DELAY_BETWEEN_CHUNKS)
@@ -96,7 +103,14 @@ class MessageChunker:
         chunks = MessageChunker.chunk_message(message, max_length)
 
         for i, chunk in enumerate(chunks):
-            await highrise_client.send_whisper(user_id, chunk)
+            try:
+                await highrise_client.send_whisper(user_id, chunk)
+            except (ConnectionResetError, OSError, Exception) as whisper_err:
+                err_str = str(whisper_err).lower()
+                if "closing transport" in err_str or "connection" in err_str or "closed" in err_str:
+                    print(f"⚠️ [Whisper] Transport closed while sending whisper, skipped cleanly ({whisper_err})")
+                    return i
+                raise
             # Add delay between chunks (except after the last one)
             if i < len(chunks) - 1:
                 await asyncio.sleep(MessageChunker.DELAY_BETWEEN_CHUNKS)
