@@ -177,9 +177,9 @@ app.get("/health", (req, res) => {
 
 
 let residentialBridgeUrl = process.env.RESIDENTIAL_BRIDGE_URL || 'https://contractors-peter-specialist-killing.trycloudflare.com';
-if (fs.existsSync(path.join(CACHE_DIR, 'bridge_url.txt'))) {
+if (fs.existsSync(path.join(__dirname, 'cache', 'bridge_url.txt'))) {
   try {
-    const saved = fs.readFileSync(path.join(CACHE_DIR, 'bridge_url.txt'), 'utf8').trim();
+    const saved = fs.readFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), 'utf8').trim();
     if (saved) residentialBridgeUrl = saved;
   } catch (_) {}
 }
@@ -188,7 +188,7 @@ app.post("/api/register-bridge", (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: "Missing url parameter" });
   residentialBridgeUrl = url.trim().replace(/\/+$/, '');
-  try { fs.writeFileSync(path.join(CACHE_DIR, 'bridge_url.txt'), residentialBridgeUrl, 'utf8'); } catch (_) {}
+  try { fs.writeFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), residentialBridgeUrl, 'utf8'); } catch (_) {}
   console.log(`🏠 [Bridge] Registered active residential audio bridge: ${residentialBridgeUrl}`);
   res.json({ success: true, bridgeUrl: residentialBridgeUrl });
 });
