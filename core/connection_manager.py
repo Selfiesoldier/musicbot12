@@ -273,10 +273,7 @@ class ConnectionManager:
         This is the correct pattern for restart handling - the exception is raised
         in a coroutine that's actually awaited, so it properly propagates.
         """
-        # Wait for connection manager to be fully started
-        await self.started_event.wait()
-        
-        # Now wait for restart event to be set
+        # Wait for restart event to be set (no dependency on started_event)
         await self.restart_event.wait()
         
         # Restart was requested - perform clean shutdown

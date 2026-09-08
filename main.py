@@ -242,7 +242,7 @@ class MusicBot(BaseBot):
         self.inventory_manager.load_inventory()
         try:
             print("📦 Fetching bot inventory...")
-            success = await self.inventory_manager.fetch_inventory(self.highrise)
+            success = await asyncio.wait_for(self.inventory_manager.fetch_inventory(self.highrise), timeout=6.0)
             if success:
                 item_count = self.inventory_manager.get_item_count()
                 print(f"✅ Inventory loaded: {item_count} items")
@@ -258,7 +258,7 @@ class MusicBot(BaseBot):
             
             # Sync outfit state from Highrise
             try:
-                await self.outfit_manager.sync_from_highrise(self.highrise)
+                await asyncio.wait_for(self.outfit_manager.sync_from_highrise(self.highrise), timeout=6.0)
             except Exception as e:
                 print(f"⚠️ Failed to sync outfit from Highrise: {e}")
         
