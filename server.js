@@ -175,6 +175,28 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok", uptime: Math.floor(process.uptime()), isPlaying, currentTitle });
 });
 
+
+let residentialBridgeUrl = process.env.RESIDENTIAL_BRIDGE_URL || null;
+
+app.post("/api/register-bridge", (req, res) => {
+  const { url } = req.body || {};
+  if (!url) return res.status(400).json({ error: "Missing url parameter" });
+  residentialBridgeUrl = url.trim().replace(/\/+$/, '');
+  console.log(`🏠 [Bridge] Registered active residential audio bridge: ${residentialBridgeUrl}`);
+  res.json({ success: true, bridgeUrl: residentialBridgeUrl });
+});
+
+app.get("/api/bridge-status", async (req, res) => {
+  if (!residentialBridgeUrl) return res.json({ active: false, bridgeUrl: null });
+  try {
+    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(4000) });
+    const data = await resp.json();
+    res.json({ active: true, bridgeUrl: residentialBridgeUrl, health: data });
+  } catch (e) {
+    res.json({ active: false, bridgeUrl: residentialBridgeUrl, error: e.message });
+  }
+});
+
 app.get("/ping", (req, res) => {
   res.send("pong");
 });
@@ -1519,6 +1541,38 @@ function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true)
 
 async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
   const isDirectSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch:');
+
+  // 0. Primary: If Home Residential Bridge is connected, stream authentic YouTube audio directly through residential IP
+  if (!isDirectSoundCloud && residentialBridgeUrl) {
+    try {
+      console.log(`🏠 [Downloader] Streaming YouTube audio via Residential Bridge (${residentialBridgeUrl})...`);
+      const bridgeStreamUrl = `${residentialBridgeUrl}/stream?url=${encodeURIComponent(url)}`;
+      const resp = await fetch(bridgeStreamUrl, { signal: AbortSignal.timeout(45000) });
+      if (!resp.ok) {
+        throw new Error(`Bridge returned HTTP status ${resp.status}`);
+      }
+      const fileStream = fs.createWriteStream(outputPath);
+      await new Promise((resolve, reject) => {
+        resp.body.pipe(fileStream);
+        resp.body.on('error', reject);
+        fileStream.on('finish', resolve);
+        fileStream.on('error', reject);
+      });
+      if (thisStreamId !== currentStreamId) {
+        try { fs.unlinkSync(outputPath); } catch (_) {}
+        throw new Error("Download aborted: Stream ID changed");
+      }
+      const stats = fs.statSync(outputPath);
+      if (stats.size > 50000) {
+        console.log(`✅ [Downloader] YouTube track downloaded via Residential Bridge (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+        return outputPath;
+      }
+      console.warn(`⚠️ [Downloader] Bridge file too small (${stats.size} bytes), proceeding to cloud fallback...`);
+    } catch (bridgeErr) {
+      if (thisStreamId !== currentStreamId) throw bridgeErr;
+      console.warn(`⚠️ [Downloader] Residential Bridge unavailable (${bridgeErr.message}), falling back to direct cloud...`);
+    }
+  }
 
   // 1. Primary: Direct YouTube with visionos/android client & PO token (avoids web SABR/ad format blocks)
   if (!isDirectSoundCloud) {
