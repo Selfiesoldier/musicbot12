@@ -647,6 +647,9 @@ class PersistentStreamManager {
     this.silenceInterval = null;
     
     this.transitionSilenceMs = 150;
+    this.transitionPcm = null;
+    this.transitionOffset = 0;
+    this.loadTransitionTrack();
     
     setInterval(() => {
       const now = Date.now();
@@ -734,6 +737,38 @@ class PersistentStreamManager {
     }, delay);
   }
   
+
+  loadTransitionTrack() {
+    try {
+      const pcmPath = path.join(__dirname, 'assets', 'transition.pcm');
+      const m4aPath = path.join(__dirname, 'assets', 'transition.m4a');
+
+      if (!fs.existsSync(pcmPath) && fs.existsSync(m4aPath)) {
+        console.log('🔄 [TransitionEngine] Generating transition.pcm from assets/transition.m4a...');
+        try {
+          execSync(`"${getFFmpegPath()}" -y -i "${m4aPath}" -f s16le -ar 44100 -ac 2 "${pcmPath}"`, { stdio: 'ignore' });
+        } catch (convErr) {
+          console.warn('⚠️ [TransitionEngine] ffmpeg audio conversion warning:', convErr.message);
+        }
+      }
+
+      if (fs.existsSync(pcmPath)) {
+        const raw = fs.readFileSync(pcmPath);
+        const chunkSize = 8820; // 50ms aligned chunk
+        const alignedLen = raw.length - (raw.length % chunkSize);
+        this.transitionPcm = Buffer.allocUnsafe(alignedLen);
+        raw.copy(this.transitionPcm, 0, 0, alignedLen);
+        this.transitionOffset = 0;
+        console.log(`☕ [TransitionEngine] Loaded seamless transition music loop (${(this.transitionPcm.length / 1024 / 1024).toFixed(2)} MB, ~${(this.transitionPcm.length / 176400).toFixed(1)}s)`);
+      } else {
+        console.warn('⚠️ [TransitionEngine] No transition track found at assets/transition.m4a');
+      }
+    } catch (e) {
+      console.error('⚠️ [TransitionEngine] Error loading transition track:', e.message);
+      this.transitionPcm = null;
+    }
+  }
+
   generateSilencePCM(durationMs = 100) {
     if (durationMs === 50) return SILENCE_50MS_PCM;
     if (durationMs === 300) return SILENCE_300MS_PCM;
@@ -751,10 +786,11 @@ class PersistentStreamManager {
     this.isSendingSilence = true;
     this.silenceStartTime = Date.now();
     this.silenceSentMs = 0;
-    console.log('🔇 Starting silence feed to keep encoder alive...');
+    console.log(this.transitionPcm ? '☕ Starting transition music loop to keep stream alive...' : '🔇 Starting silence feed to keep encoder alive...');
     
     const CHUNK_MS = 50;
-    const silenceChunk = this.generateSilencePCM(CHUNK_MS);
+    const CHUNK_SIZE = 8820;
+    const silenceZeroChunk = this.generateSilencePCM(CHUNK_MS);
     
     this.silenceInterval = setInterval(() => {
       if (!this.isSendingSilence || !this.pcmInputStream || this.pcmInputStream.destroyed) {
@@ -765,8 +801,16 @@ class PersistentStreamManager {
       // Clock-corrected pacing: maintain a 250ms lead cushion ahead of wall-clock time
       // Prevents client buffer starvation and eliminates disconnection between tracks
       while (this.silenceSentMs - elapsedMs < 250) {
+        let chunk = silenceZeroChunk;
+        if (this.transitionPcm && this.transitionPcm.length >= CHUNK_SIZE) {
+          chunk = this.transitionPcm.subarray(this.transitionOffset, this.transitionOffset + CHUNK_SIZE);
+          this.transitionOffset += CHUNK_SIZE;
+          if (this.transitionOffset >= this.transitionPcm.length) {
+            this.transitionOffset = 0; // Seamless loop wrap-around
+          }
+        }
         try {
-          this.pcmInputStream.write(silenceChunk);
+          this.pcmInputStream.write(chunk);
           this.silenceSentMs += CHUNK_MS;
         } catch (err) {
           break;
@@ -777,14 +821,14 @@ class PersistentStreamManager {
   
   stopSilenceFeed() {
     this.isSendingSilence = false;
-    console.log('🔊 Stopped silence feed - real audio playing');
+    console.log(this.transitionPcm ? '🔊 Stopped transition music - real audio playing' : '🔊 Stopped silence feed - real audio playing');
   }
   
   resumeSilenceFeed() {
     this.isSendingSilence = true;
     this.silenceStartTime = Date.now();
     this.silenceSentMs = 0;
-    console.log('🔇 Resuming silence feed...');
+    console.log(this.transitionPcm ? '☕ Resuming transition music loop...' : '🔇 Resuming silence feed...');
   }
   
   injectTransitionSilence() {
