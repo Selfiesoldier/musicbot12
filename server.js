@@ -202,11 +202,15 @@ if (fs.existsSync(path.join(__dirname, 'cache', 'bridge_url.txt'))) {
 app.post("/api/register-bridge", (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: "Missing url parameter" });
-  residentialBridgeUrl = url.trim().replace(/\/+$/, '');
+  const cleanUrl = url.trim().replace(/\/+$/, '');
+  const urlChanged = residentialBridgeUrl !== cleanUrl;
+  residentialBridgeUrl = cleanUrl;
   isBridgeHealthy = true;
   lastBridgeHealthCheck = Date.now();
-  try { fs.writeFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), residentialBridgeUrl, 'utf8'); } catch (_) {}
-  console.log(`🏠 [Bridge] Registered active residential audio bridge: ${residentialBridgeUrl}`);
+  if (urlChanged) {
+    try { fs.writeFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), residentialBridgeUrl, 'utf8'); } catch (_) {}
+    console.log(`🏠 [Bridge] Registered active residential audio bridge: ${residentialBridgeUrl}`);
+  }
   res.json({ success: true, bridgeUrl: residentialBridgeUrl });
 });
 
@@ -799,7 +803,8 @@ class PersistentStreamManager {
       // Prevents client buffer starvation and eliminates disconnection between tracks
       while (this.silenceSentMs - elapsedMs < 250) {
         let chunk = silenceZeroChunk;
-        if (this.transitionPcm && this.transitionPcm.length >= CHUNK_SIZE) {
+        // Play transition track during track transitions (up to 45s), then rest on zero-CPU silence when idle
+        if (this.transitionPcm && this.transitionPcm.length >= CHUNK_SIZE && this.silenceSentMs < 45000) {
           chunk = this.transitionPcm.subarray(this.transitionOffset, this.transitionOffset + CHUNK_SIZE);
           this.transitionOffset += CHUNK_SIZE;
           if (this.transitionOffset >= this.transitionPcm.length) {
@@ -1016,11 +1021,21 @@ class PersistentStreamManager {
         continue;
       }
 
-      // If client socket has accumulated over 256KB (~16 seconds) of unsent data, drop frozen connection
-      if (client.writableLength > 256 * 1024) {
-        console.log(`⚠️ Dropping frozen client (${Math.floor(client.writableLength / 1024)} KB queued)`);
-        clientsToRemove.push(client);
-        this.stats.droppedClients++;
+      // Real-time audio backpressure throttling:
+      // If a client's TCP socket buffer has accumulated > 64KB (~3.5s of audio),
+      // skip sending new chunks until its buffer drains.
+      // This absorbs network jitters without dropping the connection or causing reconnection storms!
+      if (client.writableLength > 64 * 1024) {
+        if (!meta.isPaused) {
+          meta.isPaused = true;
+          meta.pausedAt = now;
+        }
+        // Only drop if client has been completely unresponsive / frozen for over 35 seconds
+        if (now - meta.lastSuccessfulWrite > 35000) {
+          console.log(`⚠️ Dropping unresponsive client after 35s stall (${Math.floor(client.writableLength / 1024)} KB queued)`);
+          clientsToRemove.push(client);
+          this.stats.droppedClients++;
+        }
         continue;
       }
       
@@ -2092,7 +2107,7 @@ async function startStream(url, title, metadata) {
   broadcastEvent();
 
   if (thisStreamId === currentStreamId) {
-    playNext();
+    setImmediate(() => playNext());
   }
 }
 
@@ -2803,6 +2818,9 @@ async function playNext() {
   isPreparingTrack = true;
   isTransitioning = true;
   isPlaying = false;
+
+    // Release lock once next track is successfully dequeued so startStream completion can trigger next track
+    isPlayNextLocked = false;
 
     if (typeof next === 'string') {
       currentIsAutoplay = false;
