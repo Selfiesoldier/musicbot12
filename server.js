@@ -1763,6 +1763,11 @@ async function startStream(url, title, metadata) {
   // 2. Play TTS announcement if enabled
   const hasAnnouncement = announcementsEnabled && (title || (metadata && metadata.title));
   if (hasAnnouncement) {
+    // 1-second radio DJ breathing delay: gives Orihost container CPU time to settle to baseline idle (< 5%),
+    // drains all listener network sockets, and provides a polished radio pause between songs
+    await new Promise(r => setTimeout(r, 1000));
+    if (thisStreamId !== currentStreamId) return;
+
     let songTitle = title || metadata?.title || 'Unknown Track';
     songTitle = truncateToWords(songTitle, announcementWordLimit);
     
