@@ -662,7 +662,7 @@ class PersistentStreamManager {
     this.clientMetadata = new Map();
     this.audioBuffer = [];
     this.maxBufferSize = 200;
-    this.instantStartChunks = 80;
+    this.instantStartChunks = 25;
     
     this.stats = {
       totalBytes: 0,
@@ -705,7 +705,7 @@ class PersistentStreamManager {
     
     console.log('🚀 Starting persistent FFmpeg encoder (NEVER STOPS)...');
     
-    this.pcmInputStream = new PassThrough({ highWaterMark: 1024 * 1024 });
+    this.pcmInputStream = new PassThrough({ highWaterMark: 128 * 1024 });
     
     this.persistentEncoder = spawn(getFFmpegPath(), [
       '-threads', '1',
@@ -849,7 +849,7 @@ class PersistentStreamManager {
           break;
         }
       }
-    }, 40);
+    }, 50);
   }
   
   stopSilenceFeed() {
@@ -1052,8 +1052,8 @@ class PersistentStreamManager {
         continue;
       }
 
-      // If client socket has accumulated over 512KB (~32 seconds) of unsent data, drop frozen connection
-      if (client.writableLength > 1024 * 1024) {
+      // If client socket has accumulated over 256KB (~16 seconds) of unsent data, drop frozen connection
+      if (client.writableLength > 256 * 1024) {
         console.log(`⚠️ Dropping frozen client (${Math.floor(client.writableLength / 1024)} KB queued)`);
         clientsToRemove.push(client);
         this.stats.droppedClients++;
@@ -1199,7 +1199,9 @@ try {
   } else {
     const staleFiles = fs.readdirSync(CACHE_DIR);
     for (const f of staleFiles) {
-      try { fs.unlinkSync(path.join(CACHE_DIR, f)); } catch (e) {}
+      if (f.endsWith('.tmp') || f.endsWith('.part') || f.endsWith('.ytdl') || (f.startsWith('track_') && f.endsWith('.m4a'))) {
+        try { fs.unlinkSync(path.join(CACHE_DIR, f)); } catch (e) {}
+      }
     }
   }
 } catch (e) {}
