@@ -875,7 +875,7 @@ class PersistentStreamManager {
       this.stopSilenceFeed();
     }
 
-    const TARGET_LEAD_MS = 2500; // 2.5s lead cushion prevents buffer starvation
+    const TARGET_LEAD_MS = 250; // 250ms lead cushion prevents burst while maintaining real-time playback
     const chunkSize = 8820; // 50ms of 44.1kHz 16-bit stereo PCM
     let offset = 0;
     const startTime = Date.now();
@@ -1809,11 +1809,20 @@ async function startStream(url, title, metadata) {
     return;
   }
 
-  // Keep silence feed running while awaiting track preparation so listeners never experience dead air
-  streamManager.resumeSilenceFeed();
+  // 3. Await the complete downloaded track file (usually already downloaded during TTS)
+  // If download is still in flight (e.g. slow connection), resume transition music to prevent dead air
+  let silenceTimer = null;
+  if (!hasAnnouncement) {
+    streamManager.resumeSilenceFeed();
+  } else {
+    // For TTS: only resume transition music if download takes longer than 200ms extra
+    silenceTimer = setTimeout(() => {
+      streamManager.resumeSilenceFeed();
+    }, 200);
+  }
 
-  // 3. Await the complete downloaded track file (usually already ready!)
   const readyFile = await downloadPromise;
+  if (silenceTimer) clearTimeout(silenceTimer);
 
   if (thisStreamId !== currentStreamId) {
     try { if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath); } catch (e) {}
@@ -1983,7 +1992,7 @@ async function startStream(url, title, metadata) {
   savePlaybackState();
   broadcastEvent();
 
-  const TARGET_LEAD_MS = 2500; // 2.5s lead cushion keeps audio smooth during CPU spikes and searches
+  const TARGET_LEAD_MS = 300; // 300ms steady lead cushion - eliminates 50-chunk CPU spike burst and audio hiccups
   const pacingStartTime = Date.now();
   let bytesSent = 0;
 
@@ -1992,7 +2001,7 @@ async function startStream(url, title, metadata) {
     : (currentMetadata && currentMetadata.durationSeconds ? Number(currentMetadata.durationSeconds) : 0);
   const maxAllowedDurationMs = expectedDurationSec > 0 ? (expectedDurationSec + 8) * 1000 : 0;
 
-  console.log(`🔊 [Playing] Continuous 1.0x frame-accurate playback active (2.5s lead cushion)!`);
+  console.log(`🔊 [Playing] Continuous 1.0x frame-accurate playback active (300ms smooth cushion)!`);
 
   // Stream in steady, frame-aligned 50ms chunks using self-correcting lead cushion
   while (thisStreamId === currentStreamId) {
