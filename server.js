@@ -13,7 +13,7 @@ import session from "express-session";
 import rateLimit from "express-rate-limit";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import { registerLiveLogs } from "./live_logs.js";
+// live_logs disabled for CPU optimization
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -115,7 +115,7 @@ const sessionMiddleware = session({
 // Bypass session allocation on high-frequency streaming and health routes to save CPU & RAM
 app.use((req, res, next) => {
   const p = req.path.toLowerCase();
-  if (p === "/stream" || p.startsWith("/stream") || p === "/health" || p === "/ping" || p.startsWith("/logs") || p.startsWith("/assets")) {
+  if (p === "/stream" || p.startsWith("/stream") || p === "/health" || p === "/ping" || p.startsWith("/assets")) {
     return next();
   }
   return sessionMiddleware(req, res, next);
@@ -165,25 +165,30 @@ const requireAuth = (req, res, next) => {
 
 // Global rate limiter (exempting live audio streaming)
 app.use((req, res, next) => {
-  const p = req.path.toLowerCase(); if (p === '/stream' || p.startsWith('/stream') || p.startsWith('/logs') || p.startsWith('/api/logs')) {
+  const p = req.path.toLowerCase();
+  if (p === '/stream' || p.startsWith('/stream')) {
     return next();
   }
   return apiLimiter(req, res, next);
 });
 
-// GLOBAL DENY-BY-DEFAULT AUTH
+// GLOBAL AUTH: Allow direct unauthenticated access for Highrise bot & room listeners
 app.use((req, res, next) => {
-  // Allow public endpoints
-  const p2 = req.path.toLowerCase(); if (p2 === '/api/login' || p2 === '/stream' || p2.startsWith('/stream') || p2.startsWith('/logs') || p2.startsWith('/api/logs') || p2 === '/health' || p2 === '/ping' || p2 === '/debug-ytdlp' || p2 === '/debug-exec' || p2.startsWith('/api/register-bridge') || p2.startsWith('/api/bridge')) {
+  const p2 = req.path.toLowerCase();
+  const publicPaths = [
+    '/', '/events', '/current', '/queue', '/stats', '/health', '/ping',
+    '/stream', '/play', '/next', '/stop', '/search', '/insert',
+    '/volume', '/quality', '/announcements', '/api/login', '/api/bot-command',
+    '/api/register-bridge', '/api/bridge-status'
+  ];
+  if (publicPaths.includes(p2) || p2.startsWith('/stream') || p2.startsWith('/assets') || p2.startsWith('/public')) {
     return next();
   }
-  // Enforce auth for everything else not caught by express.static
+  // Enforce auth strictly for administrative operations (e.g. /api/restart, /api/terminal, /api/config)
   return requireAuth(req, res, next);
 });
 
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", uptime: Math.floor(process.uptime()), isPlaying, currentTitle });
-});
+// Early /health removed; comprehensive /health at line 2469 active
 
 
 let residentialBridgeUrl = process.env.RESIDENTIAL_BRIDGE_URL || 'https://contractors-peter-specialist-killing.trycloudflare.com';
@@ -2121,25 +2126,35 @@ app.get("/events", (req, res) => {
   });
 });
 
+let broadcastTimeout = null;
 function broadcastEvent() {
   if (sseClients.size === 0) return;
-  const currentState = {
-    isPlaying,
-    isTransitioning,
-    currentTitle,
-    currentMetadata,
-    queue,
-    startTime: currentStartTime,
-    serverElapsed: isPlaying && currentStartTime > 0 ? Math.max(0, Date.now() - currentStartTime) : 0,
-    volume,
-    announcementsEnabled,
-    health: streamManager.getHealthStatus(),
-    stats: streamManager.getStats()
-  };
-  const payload = `data: ${JSON.stringify(currentState)}\n\n`;
-  for (const client of sseClients) {
-    client.write(payload);
-  }
+  if (broadcastTimeout) return; // Debounce rapid state update bursts within 50ms
+  broadcastTimeout = setTimeout(() => {
+    broadcastTimeout = null;
+    if (sseClients.size === 0) return;
+    const currentState = {
+      isPlaying,
+      isTransitioning,
+      currentTitle,
+      currentMetadata,
+      queue,
+      startTime: currentStartTime,
+      serverElapsed: isPlaying && currentStartTime > 0 ? Math.max(0, Date.now() - currentStartTime) : 0,
+      volume,
+      announcementsEnabled,
+      health: streamManager.getHealthStatus(),
+      stats: streamManager.getStats()
+    };
+    const payload = `data: ${JSON.stringify(currentState)}\n\n`;
+    for (const client of sseClients) {
+      try {
+        client.write(payload);
+      } catch (_) {
+        sseClients.delete(client);
+      }
+    }
+  }, 50);
 }
 
 function broadcastEventJSON(data) {
@@ -3179,22 +3194,7 @@ app.get("/api/history", async (req, res) => {
   }
 });
 
-app.post("/api/bot-command", async (req, res) => {
-  try {
-    const response = await fetch(`http://127.0.0.1:5001/api/bot-command`, {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "X-IPC-Secret": process.env.IPC_SECRET 
-      },
-      body: JSON.stringify(req.body)
-    });
-    const result = await response.json();
-    res.status(response.status).send(result);
-  } catch (e) {
-    res.status(500).send({ error: "Failed to dispatch bot command" });
-  }
-});
+// Duplicate /api/bot-command removed; primary handler with moderation active
 
 app.post("/api/broadcast", (req, res) => {
   if (req.body) {
@@ -3304,7 +3304,7 @@ setInterval(() => {
   }
 }, 120000);
 
-registerLiveLogs(app);
+// registerLiveLogs(app); disabled for CPU optimization
 
 const rawPort = process.env.PORT || process.env.SERVER_PORT || 30191;
 const PORT = parseInt(String(rawPort).trim(), 10) || 30191;
