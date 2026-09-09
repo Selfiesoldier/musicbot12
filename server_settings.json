@@ -1,7 +1,7 @@
 {
-  "announcementsEnabled": true,
+  "announcementsEnabled": false,
   "announcementVoice": "en",
   "announcementWordLimit": 7,
-  "volume": 136,
+  "volume": 100,
   "audioBitrate": "192k"
 }

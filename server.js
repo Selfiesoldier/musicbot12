@@ -714,6 +714,7 @@ class PersistentStreamManager {
       '-i', 'pipe:0',
       '-c:a', 'libmp3lame',
       '-b:a', audioBitrate,
+      '-compression_level', '0',
       '-flush_packets', '1',
       '-write_xing', '0',
       '-id3v2_version', '0',
@@ -1853,8 +1854,9 @@ async function startStream(url, title, metadata) {
   let totalBytesDecoded = 0;
 
   // Gentle PCM buffer: 6 seconds (~1.05 MB), resume at 3 seconds (~0.53 MB) - prevents CPU spikes
-  const MAX_ACCUM_BYTES = CHUNK_SIZE * 120;
-  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 60;
+  // Ultra-gentle PCM buffer: 3s (~529 KB), resume at 1.5s - zero CPU burst
+  const MAX_ACCUM_BYTES = CHUNK_SIZE * 60;
+  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 30;
 
   let lastPcmReceivedAt = Date.now();
 
