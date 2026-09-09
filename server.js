@@ -542,9 +542,10 @@ async function generateTTSAudio(text) {
   }
 }
 
-async function injectTTSToStream(ttsBuffer) {
+async function injectTTSToStream(ttsBuffer, onDecoded = null) {
   return new Promise((resolve) => {
     if (!ttsBuffer || !streamManager.pcmInputStream || streamManager.pcmInputStream.destroyed) {
+      if (typeof onDecoded === 'function') onDecoded();
       resolve(false);
       return;
     }
@@ -580,6 +581,9 @@ async function injectTTSToStream(ttsBuffer) {
     });
     
     ttsDecoder.on('close', async (code) => {
+      if (typeof onDecoded === 'function') {
+        try { onDecoded(); } catch (e) {}
+      }
       if (code === 0 && pcmData.length > 0) {
         const fullPCM = Buffer.concat(pcmData);
         const durationSec = (fullPCM.length / 176400).toFixed(1);
@@ -600,6 +604,9 @@ async function injectTTSToStream(ttsBuffer) {
     });
     
     ttsDecoder.on('error', (err) => {
+      if (typeof onDecoded === 'function') {
+        try { onDecoded(); } catch (e) {}
+      }
       console.error('TTS decoder error:', err.message);
       resolve(false);
     });
@@ -1181,34 +1188,36 @@ function getSongCacheKey(url, title = '') {
 }
 
 function pruneLRUSongCache() {
-  try {
-    if (!fs.existsSync(CACHE_DIR)) return;
-    const files = fs.readdirSync(CACHE_DIR);
-    const songFiles = [];
-    let totalBytes = 0;
+  setImmediate(async () => {
+    try {
+      if (!fs.existsSync(CACHE_DIR)) return;
+      const files = await fs.promises.readdir(CACHE_DIR);
+      const songFiles = [];
+      let totalBytes = 0;
 
-    for (const f of files) {
-      if (f.startsWith('song_') && f.endsWith('.m4a')) {
-        const filePath = path.join(CACHE_DIR, f);
+      for (const f of files) {
+        if (f.startsWith('song_') && f.endsWith('.m4a')) {
+          const filePath = path.join(CACHE_DIR, f);
+          try {
+            const st = await fs.promises.stat(filePath);
+            songFiles.push({ name: f, path: filePath, size: st.size, mtime: st.mtimeMs });
+            totalBytes += st.size;
+          } catch (_) {}
+        }
+      }
+
+      songFiles.sort((a, b) => a.mtime - b.mtime);
+
+      while ((songFiles.length > MAX_CACHED_SONGS || totalBytes > MAX_CACHE_SIZE_BYTES) && songFiles.length > 5) {
+        const oldest = songFiles.shift();
         try {
-          const st = fs.statSync(filePath);
-          songFiles.push({ name: f, path: filePath, size: st.size, mtime: st.mtimeMs });
-          totalBytes += st.size;
+          await fs.promises.unlink(oldest.path);
+          totalBytes -= oldest.size;
+          console.log(`🧹 [SongCache] Evicted LRU cached track: ${oldest.name} (${(oldest.size / 1024 / 1024).toFixed(2)} MB)`);
         } catch (_) {}
       }
-    }
-
-    songFiles.sort((a, b) => a.mtime - b.mtime);
-
-    while ((songFiles.length > MAX_CACHED_SONGS || totalBytes > MAX_CACHE_SIZE_BYTES) && songFiles.length > 5) {
-      const oldest = songFiles.shift();
-      try {
-        fs.unlinkSync(oldest.path);
-        totalBytes -= oldest.size;
-        console.log(`🧹 [SongCache] Evicted LRU cached track: ${oldest.name} (${(oldest.size / 1024 / 1024).toFixed(2)} MB)`);
-      } catch (_) {}
-    }
-  } catch (e) {}
+    } catch (e) {}
+  });
 }
 
 async function sendRoomNotification(text) {
@@ -1249,27 +1258,29 @@ async function checkBridgeHealth() {
 }
 
 
-// 🧹 Auto-prune cache directory to prevent Linux page-cache and disk bloat (cgroup OOM prevention)
+// 🧹 Auto-prune cache directory asynchronously to prevent Linux page-cache and disk bloat (cgroup OOM prevention)
 function pruneStaleCacheFiles(keepFile = null) {
-  try {
-    if (!fs.existsSync(CACHE_DIR)) return;
-    const files = fs.readdirSync(CACHE_DIR);
-    const keepBasename = keepFile ? path.basename(keepFile) : null;
-    let prunedCount = 0;
-    for (const f of files) {
-      if (f.endsWith('.m4a') || f.endsWith('.part') || f.endsWith('.ytdl')) {
-        if (f !== keepBasename && !f.includes('transition') && !f.startsWith('song_')) {
-          try {
-            fs.unlinkSync(path.join(CACHE_DIR, f));
-            prunedCount++;
-          } catch (e) {}
+  setImmediate(async () => {
+    try {
+      if (!fs.existsSync(CACHE_DIR)) return;
+      const files = await fs.promises.readdir(CACHE_DIR);
+      const keepBasename = keepFile ? path.basename(keepFile) : null;
+      let prunedCount = 0;
+      for (const f of files) {
+        if (f.endsWith('.m4a') || f.endsWith('.part') || f.endsWith('.ytdl')) {
+          if (f !== keepBasename && !f.includes('transition') && !f.startsWith('song_')) {
+            try {
+              await fs.promises.unlink(path.join(CACHE_DIR, f));
+              prunedCount++;
+            } catch (e) {}
+          }
         }
       }
-    }
-    if (prunedCount > 0) {
-      console.log(`🧹 [MemoryGuard] Pruned ${prunedCount} stale audio cache files from disk`);
-    }
-  } catch (e) {}
+      if (prunedCount > 0) {
+        console.log(`🧹 [MemoryGuard] Pruned ${prunedCount} stale audio cache files from disk`);
+      }
+    } catch (e) {}
+  });
 }
 
 
@@ -1296,15 +1307,20 @@ function loadQueue() {
   return [];
 }
 
-async function saveQueue() {
-  try {
-    await atomicWrite(QUEUE_FILE, JSON.stringify(queue, null, 2));
-    console.log(`💾 Queue saved (${queue.length} songs)`);
-    broadcastEvent();
-  } catch (err) {
-    console.error('⚠️ Failed to save queue:', err.message);
-    logError('saveQueue', err, { queueLength: queue.length });
-  }
+let saveQueueTimer = null;
+function saveQueue() {
+  if (saveQueueTimer) clearTimeout(saveQueueTimer);
+  saveQueueTimer = setTimeout(async () => {
+    saveQueueTimer = null;
+    try {
+      await atomicWrite(QUEUE_FILE, JSON.stringify(queue));
+      console.log(`💾 Queue saved (${queue.length} songs)`);
+      broadcastEvent();
+    } catch (err) {
+      console.error('⚠️ Failed to save queue:', err.message);
+      logError('saveQueue', err, { queueLength: queue.length });
+    }
+  }, 100);
 }
 
 function loadPlaybackState() {
@@ -1321,21 +1337,26 @@ function loadPlaybackState() {
   return { isPlaying: false, currentTitle: null, currentMetadata: null };
 }
 
-async function savePlaybackState() {
-  try {
-    const state = {
-      isPlaying,
-      currentTitle,
-      currentMetadata,
-      currentIsAutoplay,
-      savedAt: Date.now()
-    };
-    await atomicWrite(PLAYBACK_STATE_FILE, JSON.stringify(state, null, 2));
-    console.log(`💾 Playback state saved (playing: ${currentTitle})`);
-    broadcastEvent();
-  } catch (err) {
-    console.error('⚠️ Failed to save playback state:', err.message);
-  }
+let savePlaybackStateTimer = null;
+function savePlaybackState() {
+  if (savePlaybackStateTimer) clearTimeout(savePlaybackStateTimer);
+  savePlaybackStateTimer = setTimeout(async () => {
+    savePlaybackStateTimer = null;
+    try {
+      const state = {
+        isPlaying,
+        currentTitle,
+        currentMetadata,
+        currentIsAutoplay,
+        savedAt: Date.now()
+      };
+      await atomicWrite(PLAYBACK_STATE_FILE, JSON.stringify(state));
+      console.log(`💾 Playback state saved (playing: ${currentTitle})`);
+      broadcastEvent();
+    } catch (err) {
+      console.error('⚠️ Failed to save playback state:', err.message);
+    }
+  }, 100);
 }
 
 const metadataCache = new Map();
@@ -1629,10 +1650,12 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
       const stats = fs.statSync(outputPath);
       if (stats.size > 50000) {
         console.log(`✅ [Downloader] YouTube track downloaded via Residential Bridge (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-        try {
-          fs.copyFileSync(outputPath, cachedPath);
-          pruneLRUSongCache();
-        } catch (_) {}
+        setImmediate(async () => {
+          try {
+            await fs.promises.copyFile(outputPath, cachedPath);
+            pruneLRUSongCache();
+          } catch (_) {}
+        });
         return outputPath;
       }
       console.warn(`⚠️ [Downloader] Bridge file too small (${stats.size} bytes), proceeding to SoundCloud fallback...`);
@@ -1658,10 +1681,12 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
     await executeYtdlpDownload(scTarget, outputPath, thisStreamId, false);
     const stats = fs.statSync(outputPath);
     if (stats.size > 50000) {
-      try {
-        fs.copyFileSync(outputPath, cachedPath);
-        pruneLRUSongCache();
-      } catch (_) {}
+      setImmediate(async () => {
+        try {
+          await fs.promises.copyFile(outputPath, cachedPath);
+          pruneLRUSongCache();
+        } catch (_) {}
+      });
       return outputPath;
     }
   } catch (scErr) {
@@ -1671,10 +1696,12 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
         await executeYtdlpDownload(`scsearch1:${cleanTitle}`, outputPath, thisStreamId, false);
         const stats = fs.statSync(outputPath);
         if (stats.size > 50000) {
-          try {
-            fs.copyFileSync(outputPath, cachedPath);
-            pruneLRUSongCache();
-          } catch (_) {}
+          setImmediate(async () => {
+            try {
+              await fs.promises.copyFile(outputPath, cachedPath);
+              pruneLRUSongCache();
+            } catch (_) {}
+          });
           return outputPath;
         }
       } catch (scErr2) {}
@@ -1706,13 +1733,19 @@ async function startStream(url, title, metadata) {
   currentLocalFilePath = localFilePath;
   pruneStaleCacheFiles(localFilePath);
 
-  // 1. Start downloading complete track file in background IMMEDIATELY
-  const downloadPromise = downloadTrackToFile(url, localFilePath, thisStreamId, title).catch(err => {
-    console.error(`❌ Track download failed: ${err.message}`);
-    return null;
-  });
+  // 1. Lazy download runner: sequence download after TTS decode to prevent CPU overlap
+  let downloadPromise = null;
+  const startDownload = () => {
+    if (!downloadPromise) {
+      downloadPromise = downloadTrackToFile(url, localFilePath, thisStreamId, title).catch(err => {
+        console.error(`❌ Track download failed: ${err.message}`);
+        return null;
+      });
+    }
+    return downloadPromise;
+  };
 
-  // 2. Play TTS announcement in parallel if enabled
+  // 2. Play TTS announcement if enabled
   const hasAnnouncement = announcementsEnabled && (title || (metadata && metadata.title));
   if (hasAnnouncement) {
     let songTitle = title || metadata?.title || 'Unknown Track';
@@ -1738,13 +1771,22 @@ async function startStream(url, title, metadata) {
       const ttsBuffer = await generateTTSAudio(announcementText);
       if (ttsBuffer && thisStreamId === currentStreamId) {
         streamManager.injectTransitionSilence();
-        await injectTTSToStream(ttsBuffer);
+        // Start download right after TTS finishes decoding (~50ms), zero CPU overlap with ttsDecoder
+        await injectTTSToStream(ttsBuffer, () => startDownload());
         streamManager.injectTransitionSilence();
+      } else {
+        startDownload();
       }
     } catch (ttsErr) {
       console.error('⚠️ TTS announcement error:', ttsErr.message);
+      startDownload();
     }
+  } else {
+    startDownload();
   }
+
+  // Ensure download is underway if not yet started
+  startDownload();
 
   // If track was superseded or skipped during TTS, abort
   if (thisStreamId !== currentStreamId) {
@@ -1808,9 +1850,9 @@ async function startStream(url, title, metadata) {
   let decoderFinished = false;
   let totalBytesDecoded = 0;
 
-  // Ultra-gentle PCM buffer: 3s (~529 KB), resume at 1.5s - zero CPU burst
-  const MAX_ACCUM_BYTES = CHUNK_SIZE * 60;
-  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 30;
+  // Ultra-gentle PCM micro-buffer: 1.0s (~176 KB), resume at 0.75s (~132 KB) - eliminates decoder CPU burst
+  const MAX_ACCUM_BYTES = CHUNK_SIZE * 20;
+  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 15;
 
   let lastPcmReceivedAt = Date.now();
 
