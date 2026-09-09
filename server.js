@@ -1423,8 +1423,7 @@ async function getVideoMetadata(url) {
 }
 
 function killCurrentStream() {
-  // Free memory immediately after stream termination
-  if (typeof global.gc === 'function') { try { global.gc(); } catch (e) {} }
+  // V8 background incremental GC handles memory without stop-the-world thread blocking
   currentStreamId++;
   if (currentYtdlp && currentDecoder) {
     try {
@@ -1467,7 +1466,7 @@ function killCurrentStream() {
 
   if (currentLocalFilePath) {
     try {
-      if (fs.existsSync(currentLocalFilePath)) {
+      if (fs.existsSync(currentLocalFilePath) && !path.basename(currentLocalFilePath).startsWith('song_')) {
         fs.unlinkSync(currentLocalFilePath);
       }
     } catch (e) {}
@@ -1798,24 +1797,64 @@ async function startStream(url, title, metadata) {
   currentDecoder = spawn(getFFmpegPath(), ffmpegArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
 
   const CHUNK_SIZE = 8820; // Exactly 50ms of 44.1kHz 16-bit stereo PCM (2,205 samples)
-  let pcmBuffer = Buffer.alloc(0);
+  const pcmChunks = [];
+  let queuedBytes = 0;
   let isDecoderPaused = false;
   let decoderFinished = false;
   let totalBytesDecoded = 0;
 
-  // Gentle PCM buffer: 6 seconds (~1.05 MB), resume at 3 seconds (~0.53 MB) - prevents CPU spikes
   // Ultra-gentle PCM buffer: 3s (~529 KB), resume at 1.5s - zero CPU burst
   const MAX_ACCUM_BYTES = CHUNK_SIZE * 60;
   const RESUME_ACCUM_BYTES = CHUNK_SIZE * 30;
 
   let lastPcmReceivedAt = Date.now();
 
+  function pullPcmChunk(neededBytes) {
+    if (queuedBytes < neededBytes || pcmChunks.length === 0) return null;
+    if (pcmChunks[0].length === neededBytes) {
+      queuedBytes -= neededBytes;
+      return pcmChunks.shift();
+    }
+    if (pcmChunks[0].length > neededBytes) {
+      const chunk = pcmChunks[0].subarray(0, neededBytes);
+      pcmChunks[0] = pcmChunks[0].subarray(neededBytes);
+      queuedBytes -= neededBytes;
+      return chunk;
+    }
+
+    const out = Buffer.allocUnsafe(neededBytes);
+    let outOffset = 0;
+    while (outOffset < neededBytes && pcmChunks.length > 0) {
+      const head = pcmChunks[0];
+      const remaining = neededBytes - outOffset;
+      if (head.length <= remaining) {
+        head.copy(out, outOffset);
+        outOffset += head.length;
+        queuedBytes -= head.length;
+        pcmChunks.shift();
+      } else {
+        head.copy(out, outOffset, 0, remaining);
+        pcmChunks[0] = head.subarray(remaining);
+        queuedBytes -= remaining;
+        outOffset += remaining;
+      }
+    }
+    return out;
+  }
+
+  function pullRemainingPcm() {
+    if (queuedBytes < 4) return null;
+    const validLen = queuedBytes - (queuedBytes % 4);
+    return pullPcmChunk(validLen);
+  }
+
   currentDecoder.stdout.on('data', (chunk) => {
     lastPcmReceivedAt = Date.now();
-    pcmBuffer = pcmBuffer.length === 0 ? chunk : Buffer.concat([pcmBuffer, chunk]);
+    pcmChunks.push(chunk);
+    queuedBytes += chunk.length;
     totalBytesDecoded += chunk.length;
 
-    if (!isDecoderPaused && pcmBuffer.length >= MAX_ACCUM_BYTES) {
+    if (!isDecoderPaused && queuedBytes >= MAX_ACCUM_BYTES) {
       currentDecoder.stdout.pause();
       isDecoderPaused = true;
     }
@@ -1832,7 +1871,7 @@ async function startStream(url, title, metadata) {
     }
   });
 
-  currentDecoder.on('close', (code) => {
+  currentDecoder.on('close', () => {
     decoderFinished = true;
   });
 
@@ -1842,18 +1881,18 @@ async function startStream(url, title, metadata) {
   });
 
   // Wait for initial pre-buffer (0.5s cushion = 88,200 bytes)
-  while (pcmBuffer.length < 88200 && !decoderFinished) {
+  while (queuedBytes < 88200 && !decoderFinished) {
     if (thisStreamId !== currentStreamId) return;
     await new Promise(r => setTimeout(r, 20));
   }
 
   if (thisStreamId !== currentStreamId) return;
 
-  if (pcmBuffer.length === 0 && decoderFinished) {
+  if (queuedBytes === 0 && decoderFinished) {
     if (thisStreamId !== currentStreamId) return;
     consecutiveZeroByteFailures++;
     console.warn(`⚠️ Track decoding produced 0 bytes for "${title}". Failures: ${consecutiveZeroByteFailures}/3`);
-    try { if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath); } catch (e) {}
+    try { if (fs.existsSync(localFilePath) && localFilePath !== fileToDecode) fs.unlinkSync(localFilePath); } catch (e) {}
     currentLocalFilePath = null;
     isPreparingTrack = false;
     isTransitioning = false;
@@ -1895,13 +1934,14 @@ async function startStream(url, title, metadata) {
 
   // Stream in steady, frame-aligned 50ms chunks using self-correcting lead cushion
   while (thisStreamId === currentStreamId) {
-    if (pcmBuffer.length >= CHUNK_SIZE) {
-      const chunk = pcmBuffer.subarray(0, CHUNK_SIZE);
-      pcmBuffer = pcmBuffer.subarray(CHUNK_SIZE);
-      streamManager.feedPCMAudio(chunk);
-      bytesSent += CHUNK_SIZE;
+    if (queuedBytes >= CHUNK_SIZE) {
+      const chunk = pullPcmChunk(CHUNK_SIZE);
+      if (chunk) {
+        streamManager.feedPCMAudio(chunk);
+        bytesSent += chunk.length;
+      }
 
-      if (isDecoderPaused && pcmBuffer.length <= RESUME_ACCUM_BYTES) {
+      if (isDecoderPaused && queuedBytes <= RESUME_ACCUM_BYTES) {
         if (currentDecoder && currentDecoder.stdout && !currentDecoder.stdout.destroyed) {
           currentDecoder.stdout.resume();
           isDecoderPaused = false;
@@ -1915,18 +1955,19 @@ async function startStream(url, title, metadata) {
       const leadMs = audioDurationSentMs - realTimeElapsedMs;
 
       if (leadMs > TARGET_LEAD_MS) {
-        const sleepMs = Math.max(1, leadMs - TARGET_LEAD_MS);
+        // Clamp sleep to 10ms-50ms to eliminate 1ms micro-sleep timer interrupts
+        const sleepMs = Math.max(10, Math.min(50, leadMs - TARGET_LEAD_MS));
         await new Promise(r => setTimeout(r, sleepMs));
       }
     } else if (decoderFinished) {
       // Decoder has finished and buffer has less than CHUNK_SIZE remaining
-      if (pcmBuffer.length >= 4) {
-        const validLen = pcmBuffer.length - (pcmBuffer.length % 4);
-        const chunk = pcmBuffer.subarray(0, validLen);
+      const chunk = pullRemainingPcm();
+      if (chunk) {
         streamManager.feedPCMAudio(chunk);
-        bytesSent += validLen;
+        bytesSent += chunk.length;
       }
-      pcmBuffer = Buffer.alloc(0);
+      pcmChunks.length = 0;
+      queuedBytes = 0;
       break; // All audio completely fed to persistent encoder!
     } else {
       // 2. Decoder stall watchdog: only check if decoder is unpaused, not finished, and buffer is truly starved
@@ -1934,12 +1975,13 @@ async function startStream(url, title, metadata) {
         lastPcmReceivedAt = Date.now(); // Never count paused buffering time as a stall
       } else if (!decoderFinished && Date.now() - lastPcmReceivedAt > 15000) {
         console.warn(`⚠️ [Decoder Watchdog] Decoder stalled with no new audio for 15s. Finishing track.`);
-        if (pcmBuffer.length >= 4) {
-          const validLen = pcmBuffer.length - (pcmBuffer.length % 4);
-          streamManager.feedPCMAudio(pcmBuffer.subarray(0, validLen));
-          bytesSent += validLen;
+        const remaining = pullRemainingPcm();
+        if (remaining) {
+          streamManager.feedPCMAudio(remaining);
+          bytesSent += remaining.length;
         }
-        pcmBuffer = Buffer.alloc(0);
+        pcmChunks.length = 0;
+        queuedBytes = 0;
         decoderFinished = true;
         break;
       }
@@ -1947,8 +1989,9 @@ async function startStream(url, title, metadata) {
       // Waiting for decoder to fill next 50ms chunk
       await new Promise(r => setTimeout(r, 10));
     }
+  
 
-    // 3. Duration limit watchdog: if playback exceeded expected duration + grace period
+      // 3. Duration limit watchdog: if playback exceeded expected duration + grace period
     const realTimeElapsedMs = Date.now() - pacingStartTime;
     if (maxAllowedDurationMs > 0 && realTimeElapsedMs > maxAllowedDurationMs) {
       console.warn(`⏰ [Duration Watchdog] Song reached duration limit (${expectedDurationSec}s + grace). Finishing track gracefully.`);
@@ -2365,6 +2408,7 @@ app.post("/next", async (req, res) => {
   isPreparingTrack = false;
   isTransitioning = false;
   isPlaying = false;
+  isPlayNextLocked = false; // Release lock so skip can immediately execute
   
   playNext().catch(err => console.error("Error in skip playNext:", err));
   
@@ -2683,10 +2727,7 @@ async function playNext() {
   let next;
   try {
     next = queue.shift();
-  } finally {
-    isPlayNextLocked = false;
-  }
-  saveQueue();
+    saveQueue();
   console.log("playNext called. Next item:", next);
   
   if (!next) {
@@ -2705,8 +2746,7 @@ async function playNext() {
   isPreparingTrack = true;
   isTransitioning = true;
   isPlaying = false;
-  
-  try {
+
     if (typeof next === 'string') {
       currentIsAutoplay = false;
       await startStream(next);
@@ -2722,6 +2762,8 @@ async function playNext() {
     setTimeout(() => {
       if (!isPlaying && !isTransitioning && !isPreparingTrack && queue.length > 0) playNext();
     }, 2000);
+  } finally {
+    isPlayNextLocked = false;
   }
 }
 
