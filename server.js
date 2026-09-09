@@ -188,6 +188,8 @@ app.post("/api/register-bridge", (req, res) => {
   const { url } = req.body || {};
   if (!url) return res.status(400).json({ error: "Missing url parameter" });
   residentialBridgeUrl = url.trim().replace(/\/+$/, '');
+  isBridgeHealthy = true;
+  lastBridgeHealthCheck = Date.now();
   try { fs.writeFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), residentialBridgeUrl, 'utf8'); } catch (_) {}
   console.log(`🏠 [Bridge] Registered active residential audio bridge: ${residentialBridgeUrl}`);
   res.json({ success: true, bridgeUrl: residentialBridgeUrl });
@@ -1271,11 +1273,11 @@ async function checkBridgeHealth() {
     return false;
   }
   const now = Date.now();
-  if (now - lastBridgeHealthCheck < 20000) {
+  if (now - lastBridgeHealthCheck < 20000 && isBridgeHealthy) {
     return isBridgeHealthy;
   }
   try {
-    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(2500) });
+    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(6000) });
     isBridgeHealthy = resp.ok;
   } catch (_) {
     isBridgeHealthy = false;
@@ -1850,9 +1852,9 @@ async function startStream(url, title, metadata) {
   let decoderFinished = false;
   let totalBytesDecoded = 0;
 
-  // Maximum PCM buffer: 30 seconds (~5.29 MB), resume at 10 seconds (~1.76 MB)
-  const MAX_ACCUM_BYTES = CHUNK_SIZE * 600;
-  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 200;
+  // Gentle PCM buffer: 6 seconds (~1.05 MB), resume at 3 seconds (~0.53 MB) - prevents CPU spikes
+  const MAX_ACCUM_BYTES = CHUNK_SIZE * 120;
+  const RESUME_ACCUM_BYTES = CHUNK_SIZE * 60;
 
   let lastPcmReceivedAt = Date.now();
 
@@ -2977,7 +2979,7 @@ app.get("/api/config", (req, res) => {
   res.send({
     roomIdSet: !!process.env.ROOM_ID,
     apiTokenSet: !!process.env.API_TOKEN,
-    port: process.env.PORT || 5000
+    port: process.env.PORT || 30191
   });
 });
 
@@ -3310,8 +3312,8 @@ setInterval(() => {
 
 registerLiveLogs(app);
 
-const rawPort = process.env.PORT || process.env.SERVER_PORT || 5000;
-const PORT = parseInt(String(rawPort).trim(), 10) || 5000;
+const rawPort = process.env.PORT || process.env.SERVER_PORT || 30191;
+const PORT = parseInt(String(rawPort).trim(), 10) || 30191;
 
 function listenWithRetry(port, retriesLeft = 10) {
   const server = app.listen(port, "0.0.0.0", async () => {
