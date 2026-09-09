@@ -420,55 +420,7 @@ async function ensureYtDlp() {
 }
 
 function getCookieArgs() {
-  if (!fs.existsSync(path.join(__dirname, 'cookies.txt')) && fs.existsSync(path.join(__dirname, 'cookies.b64'))) {
-    try {
-      const b64 = fs.readFileSync(path.join(__dirname, 'cookies.b64'), 'utf8');
-      fs.writeFileSync(path.join(__dirname, 'cookies.txt'), Buffer.from(b64, 'base64').toString('utf8'), 'utf8');
-      console.log('🍪 [CookieEngine] Restored cookies.txt from cookies.b64');
-    } catch(e) {}
-  }
-  const dirs = [__dirname, process.cwd(), '/home/container', path.join('/home/container', 'musicbot-main')];
-  const searchNames = [
-    'cookies.master.txt', 'cookies.txt', 'cookies .txt', 'www.youtube.com_cookies.txt', 'youtube.com_cookies.txt',
-    'youtubecookies.txt', 'youtube_cookies.txt', 'cookie.txt',
-    'cookies', 'youtubecookies'
-  ];
-
-  let bestFile = null;
-  let maxValidSize = 0;
-
-  for (const d of dirs) {
-    for (const name of searchNames) {
-      const full = path.join(d, name);
-      if (name.includes('runtime')) continue;
-      if (fs.existsSync(full)) {
-        try {
-          const stats = fs.statSync(full);
-          if (stats.size > 20 && stats.size < 5000000) {
-            if (stats.size > maxValidSize) {
-              maxValidSize = stats.size;
-              bestFile = full;
-            }
-          }
-        } catch (e) {}
-      }
-    }
-  }
-
-  if (bestFile) {
-    try {
-      // SHIELD MASTER COOKIE FILE:
-      // yt-dlp automatically writes back to the cookie file on exit, which strips domain tokens!
-      // We copy to an ephemeral runtime file so the master file is NEVER corrupted or overwritten.
-      const runtimePath = path.join(CACHE_DIR, 'active_runtime_cookies.txt');
-      fs.copyFileSync(bestFile, runtimePath);
-      console.log(`🍪 [CookieEngine] Shielded master cookies (${maxValidSize} bytes) from: ${bestFile} -> ${path.basename(runtimePath)}`);
-      return ['--cookies', runtimePath];
-    } catch (copyErr) {
-      console.warn(`⚠️ [CookieEngine] Could not copy to runtime file, using direct file: ${copyErr.message}`);
-      return ['--cookies', bestFile];
-    }
-  }
+  // Completely disabled to eliminate YouTube reload challenges and timeout races
   return [];
 }
 
@@ -1277,11 +1229,12 @@ async function checkBridgeHealth() {
     return false;
   }
   const now = Date.now();
-  if (now - lastBridgeHealthCheck < 20000 && isBridgeHealthy) {
+  // Cache both positive and negative results for 15s to prevent 6s hang per song when bridge is down
+  if (now - lastBridgeHealthCheck < 15000) {
     return isBridgeHealthy;
   }
   try {
-    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(6000) });
+    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(4000) });
     isBridgeHealthy = resp.ok;
   } catch (_) {
     isBridgeHealthy = false;
@@ -1524,38 +1477,32 @@ function killCurrentStream() {
   // streamManager.clearAudioBuffer(); // Keep circular audio buffer intact to prevent client stream starvation
 }
 
-function executeYtdlpDownload(url, outputPath, thisStreamId, withCookies = true) {
-  const cookieArgs = withCookies ? getCookieArgs() : [];
+function executeYtdlpDownload(url, outputPath, thisStreamId) {
   const proxyArgs = getProxyArgs();
   const isSoundCloud = url.includes('soundcloud.com') || url.startsWith('scsearch');
-  // Prefer lightweight Node.js engine (30MB) over heavyweight Deno (250MB) to prevent Render 512MB OOM
+  // Lightweight Node.js engine prevents 512MB OOM
   const jsRuntimeArgs = ['--no-js-runtimes', '--js-runtimes', 'node'];
-  const potArgs = isSoundCloud ? [] : [
-    '--extractor-args', 'youtubepot-bgutilhttp:base_url=http://127.0.0.1:4416',
-    '--extractor-args', 'youtube:player_client=visionos,android',
-  ];
   const formatArg = 'bestaudio/ba/b/best';
 
   const ytdlpArgs = [
     '--force-ipv4',
     '--no-cache-dir',
-    '--socket-timeout', '8',
-    '--retries', '3',
-    '--concurrent-fragments', '5',
+    '--socket-timeout', '10',
+    '--retries', '2',
+    '--concurrent-fragments', '1',
+    '--no-video',
     ...jsRuntimeArgs,
-    ...potArgs,
     '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
     '-f', formatArg,
     '--no-playlist',
     '--no-check-certificates',
     '--newline',
     ...proxyArgs,
-    ...cookieArgs,
     '-o', outputPath,
     url
   ];
 
-  console.log(`📥 [Downloader] Fetching audio track to "${path.basename(outputPath)}"${withCookies ? ' (with cookies)' : ' (direct fast mode)'} from ${isSoundCloud ? 'SoundCloud' : 'YouTube'}...`);
+  console.log(`📥 [Downloader] Fetching audio track to "${path.basename(outputPath)}" (fast direct mode, no cookies) from ${isSoundCloud ? 'SoundCloud' : 'YouTube'}...`);
 
   return new Promise((resolve, reject) => {
     if (thisStreamId !== currentStreamId) return reject(new Error('Superseded'));
@@ -1647,9 +1594,8 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
       const stats = fs.statSync(cachedPath);
       if (stats.size > 50000) {
         console.log(`⚡ [SongCache] Instant Cache Hit for "${title || url}" (${(stats.size / 1024 / 1024).toFixed(2)} MB)!`);
-        fs.copyFileSync(cachedPath, outputPath);
         try { fs.utimesSync(cachedPath, new Date(), new Date()); } catch (_) {}
-        return outputPath;
+        return cachedPath; // Zero-copy: decode directly from persistent cache
       }
     } catch (_) {}
   }
@@ -1661,7 +1607,7 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
     try {
       console.log(`🏠 [Downloader] Streaming YouTube audio via Residential Bridge (${residentialBridgeUrl})...`);
       const bridgeStreamUrl = `${residentialBridgeUrl}/stream?url=${encodeURIComponent(url)}`;
-      const resp = await fetch(bridgeStreamUrl, { signal: AbortSignal.timeout(45000) });
+      const resp = await fetch(bridgeStreamUrl, { signal: AbortSignal.timeout(60000) });
       if (!resp.ok) {
         throw new Error(`Bridge returned HTTP status ${resp.status}`);
       }
@@ -1834,13 +1780,14 @@ async function startStream(url, title, metadata) {
   const volumeFilter = volume !== 100 ? `volume=${volume / 100}` : '';
   const filterArgs = volumeFilter ? ['-af', volumeFilter] : [];
 
-  console.log(`🔊 [Local Streamer] Decoding "${path.basename(localFilePath)}" and starting smooth playback...`);
+  const fileToDecode = readyFile || localFilePath;
+  console.log(`🔊 [Local Streamer] Decoding "${path.basename(fileToDecode)}" and starting smooth playback...`);
 
   // Decode local file at max speed into memory buffer queue
   const ffmpegArgs = [
     '-threads', '1',
     '-vn', '-sn', '-dn',
-    '-i', localFilePath,
+    '-i', fileToDecode,
     '-f', 's16le',
     '-ar', '44100',
     '-ac', '2',
@@ -2038,9 +1985,9 @@ async function startStream(url, title, metadata) {
 
   streamManager.resumeSilenceFeed();
 
-  // Clean up local track file immediately
+  // Clean up local track file immediately (protecting persistent song cache)
   try {
-    if (fs.existsSync(localFilePath)) {
+    if (fs.existsSync(localFilePath) && localFilePath !== fileToDecode) {
       fs.unlinkSync(localFilePath);
     }
   } catch (e) {}
