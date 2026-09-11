@@ -191,38 +191,232 @@ app.use((req, res, next) => {
 // Early /health removed; comprehensive /health at line 2469 active
 
 
-let residentialBridgeUrl = process.env.RESIDENTIAL_BRIDGE_URL || 'https://contractors-peter-specialist-killing.trycloudflare.com';
-if (fs.existsSync(path.join(__dirname, 'cache', 'bridge_url.txt'))) {
-  try {
-    const saved = fs.readFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), 'utf8').trim();
-    if (saved) residentialBridgeUrl = saved;
-  } catch (_) {}
+// ==========================================
+// 🌉 MULTI-BRIDGE POOL & LOAD BALANCER
+// ==========================================
+class BridgePoolManager {
+  constructor() {
+    this.bridges = new Map();
+    this.storageFile = path.join(__dirname, 'cache', 'bridge_pool.json');
+    this.loadFromDisk();
+    setInterval(() => this.pruneStaleBridges(), 60000);
+  }
+
+  loadFromDisk() {
+    try {
+      const legacyFile = path.join(__dirname, 'cache', 'bridge_url.txt');
+      if (fs.existsSync(legacyFile)) {
+        const savedUrl = fs.readFileSync(legacyFile, 'utf8').trim();
+        if (savedUrl) this.register(savedUrl, 'Primary Bridge');
+      }
+
+      if (process.env.RESIDENTIAL_BRIDGE_URL) {
+        this.register(process.env.RESIDENTIAL_BRIDGE_URL, 'Env Bridge');
+      }
+
+      if (fs.existsSync(this.storageFile)) {
+        const data = JSON.parse(fs.readFileSync(this.storageFile, 'utf8'));
+        if (Array.isArray(data)) {
+          for (const b of data) {
+            if (b && b.url) {
+              this.bridges.set(b.url, {
+                url: b.url,
+                name: b.name || `Bridge-${this.bridges.size + 1}`,
+                lastSeen: b.lastSeen || Date.now(),
+                isHealthy: b.isHealthy ?? true,
+                lastHealthCheck: 0,
+                failCount: 0,
+                activeDownloads: 0,
+                totalDownloads: b.totalDownloads || 0
+              });
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  saveToDisk() {
+    try {
+      const list = Array.from(this.bridges.values()).map(b => ({
+        url: b.url,
+        name: b.name,
+        lastSeen: b.lastSeen,
+        isHealthy: b.isHealthy,
+        totalDownloads: b.totalDownloads
+      }));
+      fs.writeFileSync(this.storageFile, JSON.stringify(list, null, 2), 'utf8');
+
+      const best = this.getPrimaryBridge();
+      if (best) {
+        fs.writeFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), best.url, 'utf8');
+      }
+    } catch (_) {}
+  }
+
+  register(rawUrl, customName = null) {
+    if (!rawUrl) return null;
+    const cleanUrl = rawUrl.trim().replace(/\/+$/, '');
+    const now = Date.now();
+    const existing = this.bridges.get(cleanUrl);
+
+    const record = {
+      url: cleanUrl,
+      name: customName || existing?.name || `Bridge-${this.bridges.size + 1}`,
+      lastSeen: now,
+      isHealthy: true,
+      lastHealthCheck: now,
+      failCount: 0,
+      activeDownloads: existing?.activeDownloads || 0,
+      totalDownloads: existing?.totalDownloads || 0
+    };
+
+    const isNew = !existing;
+    this.bridges.set(cleanUrl, record);
+
+    if (isNew) {
+      console.log(`🌉 [BridgePool] Registered new residential bridge: "${record.name}" (${cleanUrl}) [Total bridges: ${this.bridges.size}]`);
+      this.saveToDisk();
+    } else {
+      existing.lastSeen = now;
+      existing.isHealthy = true;
+      existing.failCount = 0;
+      if (customName && existing.name !== customName) existing.name = customName;
+    }
+    return record;
+  }
+
+  getPrimaryBridge() {
+    const active = this.getAvailableBridges();
+    return active.length > 0 ? active[0] : null;
+  }
+
+  getAvailableBridges() {
+    const now = Date.now();
+    const candidates = [];
+    for (const b of this.bridges.values()) {
+      const isAlive = (now - b.lastSeen < 300000) && b.failCount < 3;
+      if (isAlive && b.isHealthy) {
+        candidates.push(b);
+      }
+    }
+    // Load balance: least active downloads first, then lowest failCount, then newest
+    candidates.sort((a, b) => {
+      if (a.activeDownloads !== b.activeDownloads) return a.activeDownloads - b.activeDownloads;
+      if (a.failCount !== b.failCount) return a.failCount - b.failCount;
+      return b.lastSeen - a.lastSeen;
+    });
+    return candidates;
+  }
+
+  async checkBridgeHealth(bridge) {
+    if (!bridge) return false;
+    const now = Date.now();
+    if (now - bridge.lastHealthCheck < 15000) {
+      return bridge.isHealthy;
+    }
+    try {
+      const resp = await fetch(`${bridge.url}/health`, { signal: AbortSignal.timeout(3500) });
+      bridge.isHealthy = resp.ok;
+      if (resp.ok) {
+        bridge.failCount = 0;
+        bridge.lastSeen = now;
+      }
+    } catch (_) {
+      bridge.isHealthy = false;
+      bridge.failCount = (bridge.failCount || 0) + 1;
+    }
+    bridge.lastHealthCheck = now;
+    return bridge.isHealthy;
+  }
+
+  async checkPoolHealth() {
+    const candidates = Array.from(this.bridges.values());
+    if (candidates.length === 0) return false;
+    await Promise.allSettled(candidates.map(b => this.checkBridgeHealth(b)));
+    return candidates.some(b => b.isHealthy);
+  }
+
+  markDownloadStart(bridge) {
+    if (bridge) {
+      bridge.activeDownloads = (bridge.activeDownloads || 0) + 1;
+      bridge.totalDownloads = (bridge.totalDownloads || 0) + 1;
+    }
+  }
+
+  markDownloadEnd(bridge, success = true) {
+    if (bridge) {
+      bridge.activeDownloads = Math.max(0, (bridge.activeDownloads || 1) - 1);
+      if (success) {
+        bridge.failCount = 0;
+        bridge.isHealthy = true;
+      } else {
+        bridge.failCount = (bridge.failCount || 0) + 1;
+        if (bridge.failCount >= 2) {
+          bridge.isHealthy = false;
+        }
+      }
+    }
+  }
+
+  pruneStaleBridges() {
+    const now = Date.now();
+    let pruned = 0;
+    for (const [url, b] of this.bridges.entries()) {
+      if (now - b.lastSeen > 900000) {
+        this.bridges.delete(url);
+        pruned++;
+      }
+    }
+    if (pruned > 0) {
+      console.log(`🧹 [BridgePool] Pruned ${pruned} offline bridge(s) [Active: ${this.bridges.size}]`);
+      this.saveToDisk();
+    }
+  }
+
+  getStatus() {
+    const now = Date.now();
+    const list = Array.from(this.bridges.values()).map(b => ({
+      name: b.name,
+      url: b.url,
+      isHealthy: b.isHealthy,
+      activeDownloads: b.activeDownloads,
+      totalDownloads: b.totalDownloads,
+      failCount: b.failCount,
+      lastSeenSecAgo: Math.floor((now - b.lastSeen) / 1000)
+    }));
+    return {
+      activeBridges: list.filter(b => b.isHealthy && b.lastSeenSecAgo < 300).length,
+      totalBridges: list.length,
+      bridges: list
+    };
+  }
 }
 
+const bridgePoolManager = new BridgePoolManager();
+let residentialBridgeUrl = bridgePoolManager.getPrimaryBridge()?.url || null;
+
 app.post("/api/register-bridge", (req, res) => {
-  const { url } = req.body || {};
+  const { url, name } = req.body || {};
   if (!url) return res.status(400).json({ error: "Missing url parameter" });
-  const cleanUrl = url.trim().replace(/\/+$/, '');
-  const urlChanged = residentialBridgeUrl !== cleanUrl;
-  residentialBridgeUrl = cleanUrl;
-  isBridgeHealthy = true;
-  lastBridgeHealthCheck = Date.now();
-  if (urlChanged) {
-    try { fs.writeFileSync(path.join(__dirname, 'cache', 'bridge_url.txt'), residentialBridgeUrl, 'utf8'); } catch (_) {}
-    console.log(`🏠 [Bridge] Registered active residential audio bridge: ${residentialBridgeUrl}`);
-  }
-  res.json({ success: true, bridgeUrl: residentialBridgeUrl });
+  const bridge = bridgePoolManager.register(url, name);
+  residentialBridgeUrl = bridgePoolManager.getPrimaryBridge()?.url || bridge.url;
+  res.json({
+    success: true,
+    bridge: {
+      name: bridge.name,
+      url: bridge.url
+    },
+    totalActiveBridges: bridgePoolManager.getAvailableBridges().length
+  });
 });
 
 app.get("/api/bridge-status", async (req, res) => {
-  if (!residentialBridgeUrl) return res.json({ active: false, bridgeUrl: null });
-  try {
-    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(4000) });
-    const data = await resp.json();
-    res.json({ active: true, bridgeUrl: residentialBridgeUrl, health: data });
-  } catch (e) {
-    res.json({ active: false, bridgeUrl: residentialBridgeUrl, error: e.message });
-  }
+  const status = bridgePoolManager.getStatus();
+  res.json({
+    active: status.activeBridges > 0,
+    ...status
+  });
 });
 
 app.get("/ping", (req, res) => {
@@ -1253,23 +1447,10 @@ let isBridgeHealthy = false;
 let lastBridgeHealthCheck = 0;
 
 async function checkBridgeHealth() {
-  if (!residentialBridgeUrl) {
-    isBridgeHealthy = false;
-    return false;
-  }
-  const now = Date.now();
-  // Cache both positive and negative results for 15s to prevent 6s hang per song when bridge is down
-  if (now - lastBridgeHealthCheck < 15000) {
-    return isBridgeHealthy;
-  }
-  try {
-    const resp = await fetch(`${residentialBridgeUrl}/health`, { signal: AbortSignal.timeout(4000) });
-    isBridgeHealthy = resp.ok;
-  } catch (_) {
-    isBridgeHealthy = false;
-  }
-  lastBridgeHealthCheck = now;
-  return isBridgeHealthy;
+  const healthy = await bridgePoolManager.checkPoolHealth();
+  isBridgeHealthy = healthy;
+  residentialBridgeUrl = bridgePoolManager.getPrimaryBridge()?.url || null;
+  return healthy;
 }
 
 
@@ -1640,46 +1821,63 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
     } catch (_) {}
   }
 
-  const bridgeOnline = !isDirectSoundCloud && (await checkBridgeHealth());
+  // 2. If Residential Bridges are connected and healthy, stream YouTube with Multi-Bridge Load Balancing & Failover
+  if (!isDirectSoundCloud) {
+    const candidateBridges = bridgePoolManager.getAvailableBridges();
+    if (candidateBridges.length > 0) {
+      for (const bridge of candidateBridges) {
+        if (thisStreamId !== currentStreamId) break;
 
-  // 2. If Home Residential Bridge is connected and healthy, stream YouTube directly
-  if (bridgeOnline) {
-    try {
-      console.log(`🏠 [Downloader] Streaming YouTube audio via Residential Bridge (${residentialBridgeUrl})...`);
-      const bridgeStreamUrl = `${residentialBridgeUrl}/stream?url=${encodeURIComponent(url)}`;
-      const resp = await fetch(bridgeStreamUrl, { signal: AbortSignal.timeout(60000) });
-      if (!resp.ok) {
-        throw new Error(`Bridge returned HTTP status ${resp.status}`);
+        console.log(`🏠 [Downloader] Streaming YouTube audio via Bridge "${bridge.name}" (${bridge.url})...`);
+        bridgePoolManager.markDownloadStart(bridge);
+
+        let downloadSuccess = false;
+        try {
+          const bridgeStreamUrl = `${bridge.url}/stream?url=${encodeURIComponent(url)}`;
+          const resp = await fetch(bridgeStreamUrl, { signal: AbortSignal.timeout(60000) });
+          if (!resp.ok) {
+            throw new Error(`Bridge returned HTTP status ${resp.status}`);
+          }
+          const fileStream = fs.createWriteStream(outputPath);
+          await new Promise((resolve, reject) => {
+            resp.body.pipe(fileStream);
+            resp.body.on('error', reject);
+            fileStream.on('finish', resolve);
+            fileStream.on('error', reject);
+          });
+          if (thisStreamId !== currentStreamId) {
+            try { fs.unlinkSync(outputPath); } catch (_) {}
+            throw new Error("Download aborted: Stream ID changed");
+          }
+          const stats = fs.statSync(outputPath);
+          if (stats.size > 50000) {
+            console.log(`✅ [Downloader] YouTube track downloaded via "${bridge.name}" (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
+            downloadSuccess = true;
+            bridgePoolManager.markDownloadEnd(bridge, true);
+
+            setImmediate(async () => {
+              try {
+                await fs.promises.copyFile(outputPath, cachedPath);
+                pruneLRUSongCache();
+              } catch (_) {}
+            });
+            return outputPath;
+          }
+          console.warn(`⚠️ [Downloader] "${bridge.name}" file too small (${stats.size} bytes), trying next bridge...`);
+        } catch (bridgeErr) {
+          if (thisStreamId !== currentStreamId) throw bridgeErr;
+          console.warn(`⚠️ [Downloader] Bridge "${bridge.name}" failed (${bridgeErr.message}), trying next bridge...`);
+        } finally {
+          if (!downloadSuccess) {
+            bridgePoolManager.markDownloadEnd(bridge, false);
+            try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch (_) {}
+          }
+        }
       }
-      const fileStream = fs.createWriteStream(outputPath);
-      await new Promise((resolve, reject) => {
-        resp.body.pipe(fileStream);
-        resp.body.on('error', reject);
-        fileStream.on('finish', resolve);
-        fileStream.on('error', reject);
-      });
-      if (thisStreamId !== currentStreamId) {
-        try { fs.unlinkSync(outputPath); } catch (_) {}
-        throw new Error("Download aborted: Stream ID changed");
-      }
-      const stats = fs.statSync(outputPath);
-      if (stats.size > 50000) {
-        console.log(`✅ [Downloader] YouTube track downloaded via Residential Bridge (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
-        setImmediate(async () => {
-          try {
-            await fs.promises.copyFile(outputPath, cachedPath);
-            pruneLRUSongCache();
-          } catch (_) {}
-        });
-        return outputPath;
-      }
-      console.warn(`⚠️ [Downloader] Bridge file too small (${stats.size} bytes), proceeding to SoundCloud fallback...`);
-    } catch (bridgeErr) {
-      if (thisStreamId !== currentStreamId) throw bridgeErr;
-      console.warn(`⚠️ [Downloader] Residential Bridge failed (${bridgeErr.message}), fast-tracking to SoundCloud...`);
+      console.warn(`⚠️ [Downloader] All available residential bridges failed, proceeding to SoundCloud fallback...`);
+    } else {
+      console.log(`⚡ [Downloader] No active residential bridges — fast-tracking directly to SoundCloud (skipping 30s cloud timeout)...`);
     }
-  } else if (!isDirectSoundCloud) {
-    console.log(`⚡ [Downloader] Residential bridge offline — fast-tracking directly to SoundCloud (skipping 30s cloud timeout)...`);
   }
 
   // 3. Clean high-fidelity SoundCloud Fallback
