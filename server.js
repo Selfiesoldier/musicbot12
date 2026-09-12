@@ -271,6 +271,16 @@ class BridgePoolManager {
       totalDownloads: existing?.totalDownloads || 0
     };
 
+    // Deduplicate: remove any stale tunnel for the same device name
+    if (customName) {
+      for (const [oldUrl, b] of this.bridges.entries()) {
+        if (b.name === customName && oldUrl !== cleanUrl) {
+          console.log(`🔄 [BridgePool] Replacing stale tunnel for "${customName}": ${oldUrl} -> ${cleanUrl}`);
+          this.bridges.delete(oldUrl);
+        }
+      }
+    }
+
     const isNew = !existing;
     this.bridges.set(cleanUrl, record);
 
@@ -284,6 +294,17 @@ class BridgePoolManager {
       if (customName && existing.name !== customName) existing.name = customName;
     }
     return record;
+  }
+
+  remove(rawUrl) {
+    if (!rawUrl) return;
+    const cleanUrl = rawUrl.trim().replace(/\/+$/, '');
+    if (this.bridges.has(cleanUrl)) {
+      const b = this.bridges.get(cleanUrl);
+      console.log(`🧹 [BridgePool] Removed dead bridge "${b?.name || 'Bridge'}" (${cleanUrl})`);
+      this.bridges.delete(cleanUrl);
+      this.saveToDisk();
+    }
   }
 
   getPrimaryBridge() {
@@ -1836,6 +1857,9 @@ async function downloadTrackToFile(url, outputPath, thisStreamId, title = '') {
           const bridgeStreamUrl = `${bridge.url}/stream?url=${encodeURIComponent(url)}`;
           const resp = await fetch(bridgeStreamUrl, { signal: AbortSignal.timeout(60000) });
           if (!resp.ok) {
+            if (resp.status === 530 || resp.status === 404) {
+              bridgePoolManager.remove(bridge.url);
+            }
             throw new Error(`Bridge returned HTTP status ${resp.status}`);
           }
           const fileStream = fs.createWriteStream(outputPath);
